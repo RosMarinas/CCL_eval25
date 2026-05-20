@@ -410,10 +410,11 @@
 
 ## 8. 需要人工确认的问题
 
-- 官方正式数据字段名是否与 `docs/data-schema.md` 的 `idx/title/author/content/qa_words/qa_sents/choose` 完全一致。
-- 情感选项缺失时，`choose_id` 应使用空字符串、`null`，还是省略字段。
-- `qa_words` 或 `qa_sents` 出现重复时，最终答案 key 是否按去重处理，还是官方评测按位置计分。
 - 词义和句子翻译的长度阈值是否需要按官方评分细则进一步收紧。
+  A：先不进一步收紧，保留建议阈值与过滤阈值两层规则。词义答案建议 6-35 个中文字符，超过 50 进入人工复核，超过 80 过滤；句子翻译建议 10-80 个中文字符，超过 120 进入人工复核，超过 180 过滤；`rationale/comment/support` 超过 60 复核，超过 100 过滤。
 - `teacher_critique` 的候选错误答案来源比例如何分配：baseline、学生模型、合成扰动各占多少。
+  A：第一版有学生模型时使用 `baseline 50% / student 30% / synthetic 20%`。若 B8 学生模型尚未产出，先使用 `baseline 70% / synthetic 30%`；B8 可用后切回 `50/30/20`。
 - 含 `needs_human_review` 的样本是否完全排除训练，还是只降权用于 critique 增强。
+  A：默认不进入 answer-only、short-evidence 主训练集。人工确认通过后可升级为高置信样本；未确认但只有轻微不确定的样本，可用于 critique 增强并降低采样权重，例如 `0.2x`。
 - 多个教师模型答案冲突时，采用投票、强模型优先，还是人工仲裁。
+  A：采用分层仲裁，不做简单投票。schema 非法直接丢弃；多教师一致则保留为高置信；词义/翻译表达不同但语义兼容时保留最简洁版本；`choose_id` 冲突时进入人工仲裁或强模型复审；复审仍冲突则标记 `low_confidence_emotion`，不进入主训练。

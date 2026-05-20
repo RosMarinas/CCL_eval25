@@ -230,8 +230,14 @@ final.choose_id = normalized(reasoner_output.draft_answer.choose_id)
 ## 需要人工确认的问题
 
 - 官方正式数据字段名是否与 `docs/data-schema.md` 的 `idx/title/author/content/qa_words/qa_sents/choose` 完全一致。
+  A：一致
 - 目标词或目标句重复出现时，最终 JSON key 是保留一次还是按出现位置区分。
+  A：按位置区分
 - 原题没有情感选项或选项数量不是四个时，`choose_id` 应输出空字符串、`null`，还是跳过该字段。
+  A：均为4个，输出空即可
 - 词义和句子翻译的长度阈值是否采用本文建议的 40 / 80 中文字符。
+  A：是
 - fallback 缺项时是否允许空字符串；若评测器不接受空字符串，需要统一最短占位策略。
+  A：接受
 - Formatter 发现 evidence 与 draft_answer 情感明显冲突时，是否允许改 `choose_id`，以及允许改动的证据强度标准。
+  A：允许
