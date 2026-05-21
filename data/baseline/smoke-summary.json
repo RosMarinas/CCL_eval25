@@ -1,0 +1,183 @@
+{
+  "generated_at": "2026-05-21 20:41:39 +0800",
+  "decode_params": {
+    "temperature": 0,
+    "top_p": 0.8,
+    "max_tokens": 768
+  },
+  "summaries": [
+    {
+      "experiment_id": "P14-qwen3-14b-bf16-vllm-nothink-zero",
+      "group": "P14",
+      "model": "Qwen/Qwen3-14B",
+      "backend": "vllm",
+      "quantization": "bf16",
+      "prompt_type": "zero-shot",
+      "shot_count": 0,
+      "sample_count": 1,
+      "json_error_rate": 0.0,
+      "avg_latency_ms": 5081.6,
+      "p95_latency_ms": 5081.6,
+      "status": "ok",
+      "notes": ""
+    },
+    {
+      "experiment_id": "P14-fast-qwen3-14b-awq4-vllm-nothink-zero",
+      "group": "P14-fast",
+      "model": "Qwen/Qwen3-14B-AWQ",
+      "backend": "vllm",
+      "quantization": "awq4",
+      "prompt_type": "zero-shot",
+      "shot_count": 0,
+      "sample_count": 1,
+      "json_error_rate": 0.0,
+      "avg_latency_ms": 17989.17,
+      "p95_latency_ms": 17989.17,
+      "status": "ok",
+      "notes": ""
+    },
+    {
+      "experiment_id": "P8-qwen3-8b-bf16-vllm-nothink-zero",
+      "group": "P8",
+      "model": "Qwen/Qwen3-8B",
+      "backend": "vllm",
+      "quantization": "bf16",
+      "prompt_type": "zero-shot",
+      "shot_count": 0,
+      "sample_count": 2,
+      "json_error_rate": 0.5,
+      "avg_latency_ms": 1499.22,
+      "p95_latency_ms": 1739.56,
+      "status": "ok",
+      "notes": ""
+    },
+    {
+      "experiment_id": "P8-qwen3-8b-awq4-vllm-nothink-zero",
+      "group": "P8",
+      "model": "Qwen/Qwen3-8B-AWQ",
+      "backend": "vllm",
+      "quantization": "awq4",
+      "prompt_type": "zero-shot",
+      "shot_count": 0,
+      "sample_count": 2,
+      "json_error_rate": 0.5,
+      "avg_latency_ms": 6051.45,
+      "p95_latency_ms": 6574.04,
+      "status": "ok",
+      "notes": ""
+    },
+    {
+      "experiment_id": "P8-internlm3-8b-instruct-bf16-vllm-normal-zero",
+      "group": "P8",
+      "model": "internlm/internlm3-8b-instruct",
+      "backend": "vllm",
+      "quantization": "bf16",
+      "prompt_type": "zero-shot",
+      "shot_count": 0,
+      "sample_count": 2,
+      "json_error_rate": 1.0,
+      "avg_latency_ms": 2478.39,
+      "p95_latency_ms": 2626.74,
+      "status": "ok",
+      "notes": ""
+    },
+    {
+      "experiment_id": "FMT-qwen3-8b-bf16-vllm-nothink-jsonfix",
+      "group": "FMT",
+      "model": "Qwen/Qwen3-8B",
+      "backend": "vllm",
+      "quantization": "bf16",
+      "prompt_type": "fmt",
+      "shot_count": 0,
+      "sample_count": 2,
+      "json_error_rate": 0.0,
+      "avg_latency_ms": 1925.1,
+      "p95_latency_ms": 2137.33,
+      "status": "ok",
+      "notes": ""
+    },
+    {
+      "experiment_id": "FMT-gemma-4-e4b-it-bf16-vllm-direct-json-jsonfix",
+      "group": "FMT",
+      "model": "google/gemma-4-E4B-it",
+      "backend": "vllm",
+      "quantization": "bf16",
+      "prompt_type": "fmt",
+      "shot_count": 0,
+      "sample_count": 2,
+      "json_error_rate": 0.5,
+      "avg_latency_ms": 1528.77,
+      "p95_latency_ms": 2316.79,
+      "status": "ok",
+      "notes": ""
+    }
+  ],
+  "failures": [],
+  "cleanup": [
+    {
+      "model": "Qwen/Qwen3-14B",
+      "pid": 2144122,
+      "terminated": true,
+      "postcheck": {
+        "port_open": false,
+        "vllm_processes": []
+      }
+    },
+    {
+      "model": "Qwen/Qwen3-14B-AWQ",
+      "pid": 2146949,
+      "terminated": true,
+      "postcheck": {
+        "port_open": false,
+        "vllm_processes": []
+      }
+    },
+    {
+      "model": "Qwen/Qwen3-8B",
+      "pid": 2150006,
+      "terminated": true,
+      "postcheck": {
+        "port_open": false,
+        "vllm_processes": []
+      }
+    },
+    {
+      "model": "Qwen/Qwen3-8B-AWQ",
+      "pid": 2151980,
+      "terminated": true,
+      "postcheck": {
+        "port_open": false,
+        "vllm_processes": []
+      }
+    },
+    {
+      "model": "internlm/internlm3-8b-instruct",
+      "pid": 2154255,
+      "terminated": true,
+      "postcheck": {
+        "port_open": false,
+        "vllm_processes": []
+      }
+    },
+    {
+      "model": "Qwen/Qwen3-8B",
+      "pid": 2156673,
+      "terminated": true,
+      "postcheck": {
+        "port_open": false,
+        "vllm_processes": []
+      }
+    },
+    {
+      "model": "google/gemma-4-E4B-it",
+      "pid": 2158631,
+      "terminated": true,
+      "postcheck": {
+        "port_open": false,
+        "vllm_processes": []
+      }
+    }
+  ],
+  "detail_path": "data/baseline/smoke-results.jsonl",
+  "failure_path": "data/baseline/smoke-failures.jsonl"
+}
