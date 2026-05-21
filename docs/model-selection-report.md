@@ -18,19 +18,22 @@
 | `FMT-qwen3-8b-bf16-vllm-nothink-jsonfix` | 2 | 0.0 | 1925.1 | 2137.33 | 进入 E3 formatter 主线 |
 | `FMT-gemma-4-e4b-it-bf16-vllm-direct-json-jsonfix` | 2 | 0.5 | 1528.77 | 2316.79 | 进入 E3 formatter 对照，重点复核缺项修复 |
 
-本轮样本量很小，JSON 错误率和延迟只作为 gate 信号，不作为稳定排序依据。
+本轮样本量很小，JSON 错误率和延迟只作为 gate 信号，不作为稳定排序依据。另一个 gate 缺口是 thinking 模式：smoke 主要验证了 non-thinking / normal-response 链路，但 prompt baseline 需要显式评估 thinking 是否提升词义、句译和情感选择上限。因此 E3 必须补充 thinking ablation，并与 non-thinking 分开记录实验 ID。
 
 ## 2. 候选分层
 
 ### Tier 1 主线
 
-这些配置进入正式 dev baseline 的主表，用于建立 prompt-only 上限、8B reasoner 主线和 formatter 主线。
+这些配置进入正式 dev baseline 的主表，用于建立 prompt-only 上限、8B reasoner 主线、thinking 能力消融和 formatter 主线。`nothink` 配置是部署友好的主 baseline；`think` 配置是 prompt-only 能力上限消融，不直接等同最终部署候选。
 
 | experiment_id | 进入原因 | E3 关注点 |
 | --- | --- | --- |
 | `P14-qwen3-14b-bf16-vllm-nothink-zero` | 14B prompt-only 上限候选；smoke 无 JSON 错误；中文任务适配预期最强。 | dev 上的任务分、JSON 稳定性、是否需要 few-shot。 |
+| `P14-qwen3-14b-bf16-vllm-think-zero` | 14B thinking prompt-only 能力消融；用于判断关闭 thinking 是否压低上限。 | 是否提升词义/句译/情感分；是否泄露 `<think>`、增加 extra text 或显著增加延迟。 |
 | `P8-qwen3-8b-bf16-vllm-nothink-zero` | 后续 B8 / BC8 最主要基座；延迟最低；smoke 可运行。 | 句子 key 标点不匹配是否高频出现。 |
+| `P8-qwen3-8b-bf16-vllm-think-zero` | 8B 主基座的 thinking 能力消融；用于判断 BC8 是否需要 teacher evidence 或 critique 补足推理能力。 | thinking 是否带来任务分收益；JSON 错误率是否可由 parser / formatter 控制。 |
 | `P8-qwen3-8b-awq4-vllm-nothink-zero` | 与 Qwen3-8B 同轴的量化对照；可评估部署成本。 | AWQ 的延迟和质量是否在 dev 上反常；句子 key 问题是否同样存在。 |
+| `P8-internlm3-8b-instruct-bf16-vllm-think-zero` | 非 Qwen 中文 8B 的 thinking 消融；用于判断 InternLM3 的 deep thinking 是否能抵消 normal-response 的格式风险。 | thinking 是否改善任务分；Markdown fence / extra text 是否进一步恶化。 |
 | `FMT-qwen3-8b-bf16-vllm-nothink-jsonfix` | formatter smoke JSON 错误率为 0；与 Qwen reasoner 同族，中文和 JSON 指令稳定性较好。 | 是否会重做题、是否改坏 clean draft、缺项修复是否可靠。 |
 
 ### Tier 2 对照
@@ -62,6 +65,8 @@
 | `extra_text_markdown_fence` | `P8-internlm3-8b-instruct-bf16-vllm-normal-zero` | 两条 smoke 均输出 fenced JSON；其中一条还伴随句子 key 标点不匹配。 | parser 可剥离 fenced JSON，但继续记录 `extra_text`，不要静默当作无错。 |
 | `formatter_incomplete_repair` | `FMT-gemma-4-e4b-it-bf16-vllm-direct-json-jsonfix` | `fmt-format-error` 中输出空词义、空句译和空 `choose_id`，触发 `empty_required_answer`、`invalid_choose_id`。 | E3 单独统计 clean draft 改坏率、缺项修复率和非法选项率。 |
 | `awq_latency_regression` | `P14-fast-qwen3-14b-awq4-vllm-nothink-zero` | smoke 平均延迟约 17.99s，高于 P14 bf16 的约 5.08s。 | dev-50 复核是否为 AWQ 首轮编译/加载后效应、后端配置或真实生成慢。 |
+| `thinking_trace_leak` | `P14-qwen3-14b-bf16-vllm-think-zero`、`P8-qwen3-8b-bf16-vllm-think-zero`、`P8-internlm3-8b-instruct-bf16-vllm-think-zero` | 尚未 smoke；thinking 模式天然可能输出 `<think>`、分析文本或 Markdown。 | parser 可剥离 thinking trace，但必须记录 `extra_text` / `thinking_trace_leak`，不能静默当成合法 final JSON。 |
+| `thinking_latency_tradeoff` | 同上 | 尚未 smoke；thinking 通常增加生成 token 和延迟。 | E3 同时比较任务分、JSON 错误率、平均延迟和 P95 延迟，不能只看总分收益。 |
 
 ## 4. E3 实验矩阵
 
@@ -72,8 +77,11 @@ E3 建议先跑 `dev-50`；若预算允许，主线升到 `dev-100`，Tier 2 至
 | 优先级 | experiment_id | 样本量 | 目的 |
 | --- | --- | ---: | --- |
 | 主线 | `P14-qwen3-14b-bf16-vllm-nothink-zero` | 50 | 建立 14B zero-shot prompt-only 上限。 |
+| 主线 | `P14-qwen3-14b-bf16-vllm-think-zero` | 50 | 衡量 14B thinking 是否显著提高 prompt-only 上限。 |
 | 主线 | `P8-qwen3-8b-bf16-vllm-nothink-zero` | 50 | 验证 B8 / BC8 基座候选的任务分和 JSON 稳定性。 |
+| 主线 | `P8-qwen3-8b-bf16-vllm-think-zero` | 50 | 衡量 8B 主基座 thinking 收益和格式代价。 |
 | 主线 | `P8-qwen3-8b-awq4-vllm-nothink-zero` | 50 | 验证 8B AWQ 速度 / 质量权衡。 |
+| 主线 | `P8-internlm3-8b-instruct-bf16-vllm-think-zero` | 50 | 验证 InternLM3 deep thinking 是否带来任务分收益，以及是否恶化 extra text。 |
 | 主线 | `FMT-qwen3-8b-bf16-vllm-nothink-jsonfix` | 50 | 验证 formatter 修复能力和改坏率。 |
 | 对照 | `P14-fast-qwen3-14b-awq4-vllm-nothink-zero` | 50 | 复核 14B AWQ 延迟异常和量化质量。 |
 | 对照 | `P8-internlm3-8b-instruct-bf16-vllm-normal-zero` | 50 | 验证非 Qwen 中文 8B 对照的 JSON-only 风险。 |
@@ -86,11 +94,14 @@ E3 建议先跑 `dev-50`；若预算允许，主线升到 `dev-100`，Tier 2 至
 | experiment_id | 样本量 | 扩展条件 |
 | --- | ---: | --- |
 | `P14-qwen3-14b-bf16-vllm-nothink-zero` | 100 | dev-50 JSON 错误率可控，作为上限曲线。 |
+| `P14-qwen3-14b-bf16-vllm-think-zero` | 100 | dev-50 任务分相对 nothink 有明确收益，且 JSON 错误率和延迟仍可接受。 |
 | `P8-qwen3-8b-bf16-vllm-nothink-zero` | 100 | 作为训练前主基座对照。 |
+| `P8-qwen3-8b-bf16-vllm-think-zero` | 100 | dev-50 能证明 thinking 收益超过格式和延迟代价。 |
 | `P8-qwen3-8b-awq4-vllm-nothink-zero` | 100 | 若 dev-50 延迟或质量不明显劣化。 |
+| `P8-internlm3-8b-instruct-bf16-vllm-think-zero` | 100 | dev-50 显示任务分明显收益，且 extra text 可被 parser / formatter 稳定控制。 |
 | `FMT-qwen3-8b-bf16-vllm-nothink-jsonfix` | 100 | 若 clean draft 改坏率可控。 |
 
-Tier 2 是否扩展到 `dev-100` 由 E3-dev-50 决定：`P14-fast` 只有在延迟回落或成本收益明确时扩展；`InternLM3` 只有在 parser + prompt 修复后 JSON 错误率显著下降时扩展；`Gemma FMT` 只有在缺项修复率和非法选项率达标时扩展。
+Tier 2 是否扩展到 `dev-100` 由 E3-dev-50 决定：`P14-fast` 只有在延迟回落或成本收益明确时扩展；`InternLM3 normal` 只有在 parser + prompt 修复后 JSON 错误率显著下降时扩展；`Gemma FMT` 只有在缺项修复率和非法选项率达标时扩展。Thinking ablation 若任务分收益明显但格式差，应进入 harness / formatter 验证，而不是直接替代 final JSON baseline。
 
 ## 5. E3 前最小修复
 
@@ -101,6 +112,7 @@ Tier 2 是否扩展到 `dev-100` 由 E3-dev-50 决定：`P14-fast` 只有在延�
 2. Parser 支持 fenced JSON 剥离：
    - 可从 Markdown code fence 或 JSON 前后解释中提取第一个 JSON 对象。
    - 继续记录 `extra_text`，并在结果表中单独统计；不能因为成功解析就把它当成完全合法输出。
+   - 对 thinking 输出可剥离 `<think>...</think>` 或其它显式 thinking trace，但必须额外记录 `thinking_trace_leak`。
 
 3. Validator 标点 normalize 只作为显式实验：
    - 不在主 baseline 中静默 normalize 句末标点。
@@ -111,12 +123,18 @@ Tier 2 是否扩展到 `dev-100` 由 E3-dev-50 决定：`P14-fast` 只有在延�
    - `FMT` dev 输入至少保留 `fmt-clean`、`fmt-format-error`、`fmt-light-conflict` 三类。
    - 单独统计 clean draft 改坏率、缺项修复率、非法 `choose_id` 修复率和空答案率。
 
+5. Thinking 实验隔离：
+   - `think` 和 `nothink` 必须是不同 experiment ID，不能混入同一结果表行。
+   - Qwen3 thinking 实验应显式开启 `enable_thinking=true` 或等价后端配置；InternLM3 thinking 实验应使用 deep thinking 模式。
+   - 报告中同时列出 strict final JSON 指标和 parser-after-strip 指标，避免把 thinking trace 泄露误判为无风险。
+
 ## 6. Gate 结论
 
 进入 E3 的主线不是最终选型，只是“值得正式 dev baseline 验证”的候选集合。当前 gate 结论为：
 
 - `Qwen3-14B bf16` 作为 P14 上限主线。
-- `Qwen3-8B bf16` 和 `Qwen3-8B-AWQ` 作为 P8 主线。
+- `Qwen3-14B bf16 thinking`、`Qwen3-8B bf16 thinking` 和 `InternLM3-8B thinking` 作为 E3 prompt baseline 能力消融，直接进入 dev-50，视结果进入 dev-100。
+- `Qwen3-8B bf16` 和 `Qwen3-8B-AWQ` 作为 P8 部署友好主线。
 - `Qwen3-8B` 作为 FMT 主线。
 - `Qwen3-14B-AWQ`、`InternLM3-8B`、`Gemma 4 E4B` 保留为 E3 对照。
 - 其他模型维持暂缓，等 E3 暴露出的能力或成本缺口再决定是否补跑。
