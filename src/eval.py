@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import OrderedDict
 from typing import Any
 
@@ -32,6 +33,8 @@ RESULT_FIELDS = [
     "emotion_score",
     "total_score",
     "json_error_rate",
+    "strict_final_json_error_rate",
+    "parser_after_strip_json_error_rate",
     "avg_latency_ms",
     "p95_latency_ms",
     "formatter_call_rate",
@@ -47,6 +50,8 @@ DETAIL_FIELDS = [
     "raw_output",
     "parsed_json",
     "json_valid",
+    "strict_final_json_valid",
+    "parser_after_strip_json_valid",
     "json_error_categories",
     "word_score",
     "translation_score",
@@ -65,6 +70,7 @@ DETAIL_FIELDS = [
 JSON_ERROR_CATEGORIES = [
     "parse_error",
     "extra_text",
+    "thinking_trace_leak",
     "missing_top_field",
     "extra_top_field",
     "idx_mismatch",
@@ -96,6 +102,7 @@ COVERAGE_ERRORS = {
 
 FORMAT_STYLE_ERRORS = {
     "extra_text",
+    "thinking_trace_leak",
     "extra_top_field",
     "extra_word_key",
     "extra_sentence_key",
@@ -103,7 +110,29 @@ FORMAT_STYLE_ERRORS = {
     "overlong_sentence_answer",
 }
 
+PARSER_STRIPPABLE_ERRORS = {"extra_text", "thinking_trace_leak"}
+
+_SCHEMA_TO_EVAL_ERROR = {
+    "missing_output_fields": "missing_top_field",
+    "unexpected_output_fields": "extra_top_field",
+    "missing_ans_qa_words": "missing_word_key",
+    "unexpected_ans_qa_words": "extra_word_key",
+    "missing_ans_qa_sents": "missing_sentence_key",
+    "unexpected_ans_qa_sents": "extra_sentence_key",
+    "empty_ans_qa_words": "empty_required_answer",
+    "empty_ans_qa_sents": "empty_required_answer",
+    "invalid_ans_qa_words": "wrong_field_type",
+    "invalid_ans_qa_sents": "wrong_field_type",
+    "invalid_choose_id_type": "wrong_field_type",
+}
+
 TOP_FIELDS = {"idx", "ans_qa_words", "ans_qa_sents", "choose_id"}
+THINK_TAG_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.IGNORECASE | re.DOTALL)
+EXPLICIT_THINKING_RE = re.compile(
+    r"(^|\n)\s*(thinking|reasoning|analysis|thought|思考|推理|分析)\s*[:：]",
+    re.IGNORECASE,
+)
+FENCE_RE = re.compile(r"^\s*```(?:json|JSON)?\s*(.*?)\s*```\s*$", re.DOTALL)
 
 
 def parse_json_object(raw: str) -> tuple[dict[str, Any] | None, list[str]]:
@@ -114,24 +143,31 @@ def parse_json_object(raw: str) -> tuple[dict[str, Any] | None, list[str]]:
     if not stripped:
         return None, ["parse_error"]
 
-    try:
-        parsed = json.loads(stripped)
-    except json.JSONDecodeError:
-        start = stripped.find("{")
-        end = stripped.rfind("}")
-        if start < 0 or end <= start:
-            return None, ["parse_error"]
+    errors: list[str] = []
+    if _has_thinking_trace(stripped):
+        errors.extend(["extra_text", "thinking_trace_leak"])
+
+    think_stripped = THINK_TAG_RE.sub("", stripped).strip()
+    candidates = [think_stripped]
+    fenced = _extract_fenced_json(think_stripped)
+    if fenced is not None:
+        candidates.append(fenced)
+    bracketed = _extract_first_json_object(think_stripped)
+    if bracketed is not None:
+        candidates.append(bracketed)
+
+    for candidate in candidates:
         try:
-            parsed = json.loads(stripped[start : end + 1])
+            parsed = json.loads(candidate)
         except json.JSONDecodeError:
-            return None, ["parse_error"]
+            continue
         if not isinstance(parsed, dict):
             return None, ["parse_error"]
-        return parsed, ["extra_text"]
+        if candidate != stripped:
+            errors.append("extra_text")
+        return parsed, _ordered_errors(errors)
 
-    if not isinstance(parsed, dict):
-        return None, ["parse_error"]
-    return parsed, []
+    return None, _ordered_errors(errors + ["parse_error"])
 
 
 def classify_json_errors(
@@ -157,6 +193,8 @@ def make_experiment_record(**kwargs: Any) -> dict[str, Any]:
     defaults = {
         "reasoner_model": "",
         "formatter_model": "",
+        "strict_final_json_error_rate": None,
+        "parser_after_strip_json_error_rate": None,
         "formatter_call_rate": None,
         "formatter_regression_rate": None,
         "retry_rate": 0,
@@ -174,6 +212,8 @@ def make_sample_record(**kwargs: Any) -> dict[str, Any]:
         "raw_output": "",
         "parsed_json": None,
         "json_valid": False,
+        "strict_final_json_valid": False,
+        "parser_after_strip_json_valid": False,
         "json_error_categories": [],
         "word_score": None,
         "translation_score": None,
@@ -269,18 +309,24 @@ def compute_json_error_rates(error_categories: list[list[str]]) -> dict[str, flo
         return {
             "sample_count": 0,
             "json_error_rate": 0,
+            "strict_final_json_error_rate": 0,
+            "parser_after_strip_json_error_rate": 0,
             "hard_json_error_rate": 0,
             "coverage_error_rate": 0,
             "format_style_error_rate": 0,
         }
 
     any_error = 0
+    strict_final_error = 0
+    parser_after_strip_error = 0
     hard_error = 0
     coverage_error = 0
     format_style_error = 0
     for categories in error_categories:
         category_set = set(categories)
         any_error += int(bool(category_set))
+        strict_final_error += int(bool(category_set))
+        parser_after_strip_error += int(bool(category_set - PARSER_STRIPPABLE_ERRORS))
         hard_error += int(bool(category_set & HARD_JSON_ERRORS))
         coverage_error += int(bool(category_set & COVERAGE_ERRORS))
         format_style_error += int(bool(category_set & FORMAT_STYLE_ERRORS))
@@ -288,6 +334,8 @@ def compute_json_error_rates(error_categories: list[list[str]]) -> dict[str, flo
     return {
         "sample_count": count,
         "json_error_rate": any_error / count,
+        "strict_final_json_error_rate": strict_final_error / count,
+        "parser_after_strip_json_error_rate": parser_after_strip_error / count,
         "hard_json_error_rate": hard_error / count,
         "coverage_error_rate": coverage_error / count,
         "format_style_error_rate": format_style_error / count,
@@ -472,12 +520,17 @@ def _validate_output_errors(parsed: dict[str, Any], task: dict[str, Any]) -> lis
         return []
     if result is True or result is None:
         return []
+    errors: list[str] = []
+    raw_errors = []
     if isinstance(result, list):
-        return [err for err in result if err in JSON_ERROR_CATEGORIES]
-    if isinstance(result, dict):
+        raw_errors = result
+    elif isinstance(result, dict):
         raw_errors = result.get("errors") or result.get("error_categories") or []
-        return [err for err in raw_errors if err in JSON_ERROR_CATEGORIES]
-    return []
+    for err in raw_errors:
+        mapped = _SCHEMA_TO_EVAL_ERROR.get(err)
+        if mapped and mapped not in errors:
+            errors.append(mapped)
+    return errors
 
 
 def _ordered_errors(errors: list[str]) -> list[str]:
@@ -488,6 +541,31 @@ def _ordered_errors(errors: list[str]) -> list[str]:
             result.append(category)
             seen.add(category)
     return result
+
+
+def _has_thinking_trace(text: str) -> bool:
+    return bool(THINK_TAG_RE.search(text) or EXPLICIT_THINKING_RE.search(text))
+
+
+def _extract_fenced_json(text: str) -> str | None:
+    match = FENCE_RE.match(text)
+    if not match:
+        return None
+    return match.group(1).strip()
+
+
+def _extract_first_json_object(text: str) -> str | None:
+    decoder = json.JSONDecoder()
+    for start, char in enumerate(text):
+        if char != "{":
+            continue
+        try:
+            parsed, end = decoder.raw_decode(text[start:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return text[start : start + end]
+    return None
 
 
 def _unique(values: Any) -> list[str]:

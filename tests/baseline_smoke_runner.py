@@ -245,12 +245,7 @@ def run_experiment(spec: dict[str, Any], tasks: list[dict[str, Any]]) -> list[di
     prompt_config = PromptConfig(
         prompt_type=spec["prompt_type"],
         shot_count=spec["shot_count"],
-        decoding_params={
-            **DECODE_PARAMS,
-            "chat_template_kwargs": {"enable_thinking": False}
-            if spec["model"].startswith("Qwen/Qwen3")
-            else {},
-        },
+        decoding_params={**DECODE_PARAMS},
     )
     input_items = make_formatter_inputs(tasks) if spec["group"] == "FMT" else tasks[: spec["sample_count"]]
 

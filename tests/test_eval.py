@@ -37,6 +37,47 @@ class EvalRecorderTest(unittest.TestCase):
         self.assertIsNone(parsed)
         self.assertEqual(errors, ["parse_error"])
 
+    def test_parse_json_object_strips_fenced_json_and_preserves_extra_text(self):
+        raw = '```json\n{"idx": 7, "choose_id": "A"}\n```\n说明文字'
+
+        parsed, errors = parse_json_object(raw)
+
+        self.assertEqual(parsed, {"idx": 7, "choose_id": "A"})
+        self.assertEqual(errors, ["extra_text"])
+
+    def test_parse_json_object_strips_think_tags_and_flags_leak(self):
+        raw = '<think>{"draft": "not final"}</think>\n{"idx": 7, "choose_id": "A"}'
+
+        parsed, errors = parse_json_object(raw)
+
+        self.assertEqual(parsed, {"idx": 7, "choose_id": "A"})
+        self.assertIn("extra_text", errors)
+        self.assertIn("thinking_trace_leak", errors)
+
+    def test_parse_json_object_flags_explicit_thinking_trace_leak(self):
+        raw = 'Thinking: first solve the poem.\nFinal JSON:\n{"idx": 7, "choose_id": "A"}'
+
+        parsed, errors = parse_json_object(raw)
+
+        self.assertEqual(parsed, {"idx": 7, "choose_id": "A"})
+        self.assertIn("extra_text", errors)
+        self.assertIn("thinking_trace_leak", errors)
+
+    def test_classify_json_errors_keeps_thinking_trace_signal_after_parse(self):
+        raw = json.dumps(
+            {
+                "idx": 7,
+                "ans_qa_words": {"春风": "春天的风"},
+                "ans_qa_sents": {"春风又绿江南岸。": "春风又吹绿了江南岸"},
+                "choose_id": "A",
+            },
+            ensure_ascii=False,
+        )
+
+        errors = classify_json_errors(f"<think>先分析。</think>\n{raw}", SAMPLE_TASK)
+
+        self.assertEqual(errors, ["extra_text", "thinking_trace_leak"])
+
     def test_classify_json_errors_reports_schema_and_task_mismatches(self):
         raw = json.dumps(
             {
@@ -86,6 +127,8 @@ class EvalRecorderTest(unittest.TestCase):
         self.assertEqual(list(experiment.keys()), RESULT_FIELDS)
         self.assertIsNone(experiment["formatter_call_rate"])
         self.assertEqual(experiment["retry_rate"], 0)
+        self.assertIn("strict_final_json_error_rate", experiment)
+        self.assertIn("parser_after_strip_json_error_rate", experiment)
 
         sample = make_sample_record(
             experiment_id="H2-test",
@@ -98,6 +141,8 @@ class EvalRecorderTest(unittest.TestCase):
         self.assertEqual(list(sample.keys()), DETAIL_FIELDS)
         self.assertIsNone(sample["latency_ms"])
         self.assertFalse(sample["formatter_called"])
+        self.assertIn("strict_final_json_valid", sample)
+        self.assertIn("parser_after_strip_json_valid", sample)
 
     def test_compute_formatter_regression_counts_score_json_and_fix_rates(self):
         summary = compute_formatter_regression(
@@ -138,6 +183,8 @@ class EvalRecorderTest(unittest.TestCase):
         self.assertEqual(summary["hard_json_error_rate"], 1 / 4)
         self.assertEqual(summary["coverage_error_rate"], 2 / 4)
         self.assertEqual(summary["format_style_error_rate"], 1 / 4)
+        self.assertEqual(summary["strict_final_json_error_rate"], 3 / 4)
+        self.assertEqual(summary["parser_after_strip_json_error_rate"], 3 / 4)
 
     def test_task_error_template_returns_expected_shapes(self):
         word_template = task_error_template("word")

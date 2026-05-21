@@ -1,4 +1,4 @@
-# AGENTS.md
+# CLAUDE.md
 
 ## Core Philosophy
 
@@ -71,6 +71,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 1. 你的修改应该使得项目更易于理和维护，而不是更复杂。需要进行改进时请直接在源代码中修改，而不是新建文件;
 2. 你可以编写脚本临时测试功能，但是请将脚本放在tests/目录下，并在测试完成后及时清理;
 3. 用户可能会修改代码，请你在覆盖用户修改前，先检查用户的改动内容，确保不会覆盖用户的重要修改.
+
 ## 环境
 - 使用 uv 作为包管理器，通过修改 pyproject.toml 来添加新的依赖，使用 `uv run` 来运行代码。
 - 本地环境为 macOS，不要在本地直接运行代码。项目代码会通过 `sync.sh` 自动同步到 Linux 服务器。
@@ -81,6 +82,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
   - **禁止** `remote_run.py uv sync`：`uv sync` 会根据 pyproject.toml 删除远程未声明的包（会毁掉 vllm/torch 等 GPU 环境）。
   - `uv.lock` 已被 sync.sh 排除同步（平台相关，macOS vs Linux 不能共用），远程会在 `uv pip install` 时自行解析。
 - 运行代码：使用转发器 `python3 remote_run.py <command>`。例如 `python3 remote_run.py python train.py`。服务器输出会自动返回。
+
 ## Agent skills
 
 ### Issue tracker
@@ -93,5 +95,4 @@ Uses the canonical label vocabulary: `needs-triage`, `needs-info`, `ready-for-ag
 
 ### Domain docs
 
-Single-context: one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
-
+Single-context: one `CONTEXT.md` + `docs` at the repo root. See `docs/agents/domain.md`.

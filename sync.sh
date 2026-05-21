@@ -22,9 +22,22 @@ fi
 
 # Patterns to exclude from sync
 EXCLUDES=(
-    '.git' '.worktrees/' '.venv' '.DS_Store'
+    '.git' '.worktrees/' '.venv/' '.DS_Store'
     'checkpoints/' 'logs/' 'wandb/'  '__pycache__/'
-    '*.pyc'
+    '*.pyc' 'uv.lock'
+)
+
+# Files that affect execution should be strict mirrors: removed locally means
+# removed remotely. Everything else is upload-only so remote run artifacts are
+# never deleted just because they do not exist locally yet.
+STRICT_ROOT_FILES=(
+    '*.py'
+    'pyproject.toml'
+    'sync.sh'
+)
+STRICT_SOURCE_DIRS=(
+    'src/'
+    'tests/'
 )
 # ============================================================
 
@@ -37,9 +50,26 @@ done
 echo "Syncing ${LOCAL_DIR} -> ${REMOTE_HOST}:${REMOTE_DIR}"
 echo "Branch: ${BRANCH} (${COMMIT})"
 echo "Excluding: ${EXCLUDES[*]}"
+echo "Upload-only sync: whole worktree"
+echo "Strict mirror delete: root files (${STRICT_ROOT_FILES[*]}), dirs (${STRICT_SOURCE_DIRS[*]})"
 
 sync_once() {
-    rsync -az --delete "${EXCLUDE_ARGS[@]}" "$LOCAL_DIR" "$REMOTE_HOST:$REMOTE_DIR"
+    rsync -az "${EXCLUDE_ARGS[@]}" "$LOCAL_DIR" "$REMOTE_HOST:$REMOTE_DIR"
+
+    ROOT_FILTER_ARGS=()
+    for pattern in "${STRICT_ROOT_FILES[@]}"; do
+        ROOT_FILTER_ARGS+=(--include "/$pattern")
+    done
+    ROOT_FILTER_ARGS+=(--exclude "/*")
+    rsync -az --delete "${ROOT_FILTER_ARGS[@]}" "$LOCAL_DIR" "$REMOTE_HOST:$REMOTE_DIR"
+
+    for dir in "${STRICT_SOURCE_DIRS[@]}"; do
+        rsync -az --delete \
+            --include "*/" \
+            --include "*.py" \
+            --exclude "*" \
+            "$LOCAL_DIR$dir" "$REMOTE_HOST:$REMOTE_DIR$dir"
+    done
 }
 
 # Initial sync before watching

@@ -5,6 +5,7 @@ from src.schema import (
     normalize_input,
     validate_input,
     validate_output,
+    validate_output_punctuation_normalized,
 )
 
 
@@ -68,6 +69,94 @@ class SchemaTest(unittest.TestCase):
         self.assertIn("unexpected_output_fields", result["errors"])
         self.assertIn("missing_ans_qa_words", result["errors"])
         self.assertIn("invalid_choose_id", result["errors"])
+
+    def test_validate_output_rejects_missing_final_chinese_period_strictly(self):
+        task = normalize_input(
+            {
+                "idx": 4,
+                "content": "掩泪空相向，风尘何处期。",
+                "qa_words": [],
+                "qa_sents": ["掩泪空相向，风尘何处期。"],
+                "choose": {"D": "惜别"},
+            }
+        )
+        output = {
+            "idx": 4,
+            "ans_qa_words": {},
+            "ans_qa_sents": {"掩泪空相向，风尘何处期": "只能含泪相望而别"},
+            "choose_id": "D",
+        }
+
+        result = validate_output(output, task)
+
+        self.assertFalse(result["valid"])
+        self.assertIn("missing_ans_qa_sents", result["errors"])
+        self.assertIn("unexpected_ans_qa_sents", result["errors"])
+
+    def test_punctuation_normalized_validation_accepts_missing_final_chinese_period(self):
+        task = normalize_input(
+            {
+                "idx": 4,
+                "content": "掩泪空相向，风尘何处期。",
+                "qa_words": [],
+                "qa_sents": ["掩泪空相向，风尘何处期。"],
+                "choose": {"D": "惜别"},
+            }
+        )
+        output = {
+            "idx": 4,
+            "ans_qa_words": {},
+            "ans_qa_sents": {"掩泪空相向，风尘何处期": "只能含泪相望而别"},
+            "choose_id": "D",
+        }
+
+        result = validate_output_punctuation_normalized(output, task)
+
+        self.assertTrue(result["valid"])
+        self.assertNotIn("missing_ans_qa_sents", result["errors"])
+        self.assertNotIn("unexpected_ans_qa_sents", result["errors"])
+
+    def test_punctuation_normalized_validation_signals_sentence_key_mismatch(self):
+        task = normalize_input(
+            {
+                "idx": 4,
+                "content": "掩泪空相向，风尘何处期。",
+                "qa_words": [],
+                "qa_sents": ["掩泪空相向，风尘何处期。"],
+                "choose": {"D": "惜别"},
+            }
+        )
+        output = {
+            "idx": 4,
+            "ans_qa_words": {},
+            "ans_qa_sents": {"掩泪空相向，风尘何处期": "只能含泪相望而别"},
+            "choose_id": "D",
+        }
+
+        result = validate_output_punctuation_normalized(output, task)
+
+        self.assertIn("punctuation_key_mismatch", result["warnings"])
+
+    def test_punctuation_normalized_validation_does_not_report_non_empty_answer_as_empty(self):
+        task = normalize_input(
+            {
+                "idx": 4,
+                "content": "掩泪空相向，风尘何处期。",
+                "qa_words": [],
+                "qa_sents": ["掩泪空相向，风尘何处期。"],
+                "choose": {"D": "惜别"},
+            }
+        )
+        output = {
+            "idx": 4,
+            "ans_qa_words": {},
+            "ans_qa_sents": {"掩泪空相向，风尘何处期": "只能含泪相望而别"},
+            "choose_id": "D",
+        }
+
+        result = validate_output_punctuation_normalized(output, task)
+
+        self.assertNotIn("empty_ans_qa_sents", result["warnings"])
 
     def test_build_output_from_training_uses_keywords_only_and_flags_unmapped_fields(self):
         raw = {

@@ -62,6 +62,21 @@ class BaselineTest(unittest.TestCase):
         self.assertIn('"idx": 7', prompt)
         self.assertIn("现在只输出待作答输入的最终 JSON", prompt)
 
+    def test_render_answer_prompt_requires_verbatim_input_keys(self):
+        task = {
+            **TASK,
+            "qa_words": [" 半卷 "],
+            "qa_sents": ["故关衰草遍，离别自堪悲。"],
+        }
+
+        prompt = render_answer_prompt(task, PromptConfig(prompt_type="zero-shot"))
+
+        self.assertIn("key 必须逐字复制输入数组中的原始字符串", prompt)
+        self.assertIn("包括标点、空格和全半角字符", prompt)
+        self.assertIn("不能删改句末标点", prompt)
+        self.assertIn('" 半卷 "', prompt)
+        self.assertIn('"故关衰草遍，离别自堪悲。"', prompt)
+
     def test_render_formatter_prompt_uses_fmt_protocol(self):
         formatter_input = {
             "task": TASK,
@@ -119,6 +134,105 @@ class BaselineTest(unittest.TestCase):
         self.assertEqual(record["metadata"]["prompt_type"], "zero-shot")
         self.assertEqual(record["metadata"]["shot_count"], 0)
         self.assertEqual(record["metadata"]["decoding_params"]["max_tokens"], 256)
+
+    def test_qwen3_think_and_nothink_have_independent_ids_and_enable_thinking_metadata(self):
+        prompt_config = PromptConfig(prompt_type="zero-shot", shot_count=0)
+        nothink_config = ModelConfig(
+            group="P8",
+            model_name="Qwen/Qwen3-8B",
+            parameter_scale="8.2B",
+            quantization="bf16",
+            backend="vLLM",
+            thinking_mode="non-thinking",
+        )
+        think_config = ModelConfig(
+            group="P8",
+            model_name="Qwen/Qwen3-8B",
+            parameter_scale="8.2B",
+            quantization="bf16",
+            backend="vLLM",
+            thinking_mode="thinking",
+        )
+
+        self.assertEqual(
+            build_experiment_id(nothink_config, prompt_config),
+            "P8-qwen3-8b-bf16-vllm-nothink-zero",
+        )
+        self.assertEqual(
+            build_experiment_id(think_config, prompt_config),
+            "P8-qwen3-8b-bf16-vllm-think-zero",
+        )
+
+        def generate_fn(prompt, metadata):
+            enable_thinking = metadata["decoding_params"]["chat_template_kwargs"][
+                "enable_thinking"
+            ]
+            return json.dumps(
+                {
+                    "idx": 7,
+                    "ans_qa_words": {"衰草": "枯黄的草"},
+                    "ans_qa_sents": {"故关衰草遍，离别自堪悲": "旧关满是枯草，离别令人悲伤"},
+                    "choose_id": "D",
+                    "_enable_thinking_seen": enable_thinking,
+                },
+                ensure_ascii=False,
+            )
+
+        nothink_result = run_prompt_baseline(
+            [TASK], nothink_config, prompt_config, generate_fn
+        )[0]
+        think_result = run_prompt_baseline(
+            [TASK], think_config, prompt_config, generate_fn
+        )[0]
+
+        self.assertIs(
+            nothink_result.metadata["decoding_params"]["chat_template_kwargs"][
+                "enable_thinking"
+            ],
+            False,
+        )
+        self.assertIs(
+            think_result.metadata["decoding_params"]["chat_template_kwargs"][
+                "enable_thinking"
+            ],
+            True,
+        )
+        self.assertEqual(nothink_result.metadata["thinking_config"]["provider"], "qwen3")
+        self.assertEqual(think_result.metadata["thinking_config"]["provider"], "qwen3")
+
+    def test_internlm3_thinking_metadata_records_deep_thinking_placeholder(self):
+        model_config = ModelConfig(
+            group="P8",
+            model_name="internlm/internlm3-8b-instruct",
+            parameter_scale="8B",
+            quantization="bf16",
+            backend="vLLM",
+            thinking_mode="deep thinking",
+        )
+        prompt_config = PromptConfig(prompt_type="zero-shot", shot_count=0)
+
+        def generate_fn(prompt, metadata):
+            self.assertEqual(
+                metadata["experiment_id"],
+                "P8-internlm3-8b-instruct-bf16-vllm-think-zero",
+            )
+            thinking_config = metadata["thinking_config"]
+            self.assertEqual(thinking_config["provider"], "internlm3")
+            self.assertEqual(thinking_config["mode"], "deep_thinking")
+            self.assertIs(thinking_config["placeholder"], True)
+            return json.dumps(
+                {
+                    "idx": 7,
+                    "ans_qa_words": {"衰草": "枯黄的草"},
+                    "ans_qa_sents": {"故关衰草遍，离别自堪悲": "旧关满是枯草，离别令人悲伤"},
+                    "choose_id": "D",
+                },
+                ensure_ascii=False,
+            )
+
+        result = run_prompt_baseline([TASK], model_config, prompt_config, generate_fn)[0]
+
+        self.assertEqual(result.metadata["thinking_config"]["mode"], "deep_thinking")
 
     def test_run_prompt_baseline_fmt_renders_formatter_input_and_keeps_invalid_json(self):
         model_config = ModelConfig(

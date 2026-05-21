@@ -6,6 +6,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
+_THINK_TAG_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.IGNORECASE | re.DOTALL)
+_FENCE_RE = re.compile(r"^\s*```(?:json|JSON)?\s*(.*?)\s*```\s*$", re.DOTALL)
 
 GenerateFn = Callable[[str, dict[str, Any]], str]
 
@@ -198,8 +200,8 @@ def _answer_instructions() -> str:
         "- 不要输出解释、分析、证据、草稿或任何 JSON 之外的文字。\n"
         "- JSON 字段必须且只能包含：idx、ans_qa_words、ans_qa_sents、choose_id。\n"
         "- idx 必须与输入 idx 完全一致。\n"
-        "- ans_qa_words 是对象，key 必须使用 qa_words 中的原词；重复词语只输出一个 key；value 是该词在诗中的简洁解释。\n"
-        "- ans_qa_sents 是对象，key 必须使用 qa_sents 中的原句；重复句子只输出一个 key；value 是该句的简洁现代汉语翻译。\n"
+        "- ans_qa_words 是对象，key 必须逐字复制输入数组中的原始字符串，使用 qa_words 中的原词；包括标点、空格和全半角字符，不能删改句末标点；重复词语只输出一个 key；value 是该词在诗中的简洁解释。\n"
+        "- ans_qa_sents 是对象，key 必须逐字复制输入数组中的原始字符串，使用 qa_sents 中的原句；包括标点、空格和全半角字符，不能删改句末标点；重复句子只输出一个 key；value 是该句的简洁现代汉语翻译。\n"
         "- choose_id 必须从 choose 的选项 ID 中选择一个最符合全诗情感的选项。"
     )
 
@@ -210,7 +212,8 @@ def _metadata(
     experiment_id: str,
     idx: Any,
 ) -> dict[str, Any]:
-    return {
+    decoding_params, thinking_config = _generation_metadata(model_config, prompt_config)
+    metadata = {
         "idx": idx,
         "experiment_id": experiment_id,
         "group": model_config.group,
@@ -222,8 +225,39 @@ def _metadata(
         "prompt_type": prompt_config.prompt_type,
         "prompt_name": prompt_config.prompt_name,
         "shot_count": prompt_config.shot_count,
-        "decoding_params": dict(prompt_config.decoding_params),
+        "decoding_params": decoding_params,
     }
+    if thinking_config is not None:
+        metadata["thinking_config"] = thinking_config
+    return metadata
+
+
+def _generation_metadata(
+    model_config: ModelConfig,
+    prompt_config: PromptConfig,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    decoding_params = dict(prompt_config.decoding_params)
+    model_name = model_config.model_name.lower()
+    thinking_slug = _thinking_slug(model_config.thinking_mode)
+
+    if model_name.startswith("qwen/qwen3"):
+        enable_thinking = thinking_slug == "think"
+        chat_template_kwargs = dict(decoding_params.get("chat_template_kwargs", {}))
+        chat_template_kwargs["enable_thinking"] = enable_thinking
+        decoding_params["chat_template_kwargs"] = chat_template_kwargs
+        return decoding_params, {
+            "provider": "qwen3",
+            "enable_thinking": enable_thinking,
+        }
+
+    if "internlm3" in model_name and thinking_slug == "think":
+        return decoding_params, {
+            "provider": "internlm3",
+            "mode": "deep_thinking",
+            "placeholder": True,
+        }
+
+    return decoding_params, None
 
 
 def _validate_configs(model_config: ModelConfig, prompt_config: PromptConfig) -> None:
@@ -302,21 +336,54 @@ def _schema_result_to_bool(result: Any) -> tuple[bool, str | None]:
 
 
 def _parse_json_object(raw_output: str) -> tuple[dict[str, Any] | None, str | None]:
-    text = raw_output.strip()
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        start = text.find("{")
-        end = text.rfind("}")
-        if start < 0 or end <= start:
-            return None, "raw output is not a JSON object"
+    text = "" if raw_output is None else str(raw_output)
+    stripped = text.strip()
+    if not stripped:
+        return None, "raw output is not a JSON object"
+
+    # Strip <think>...</think> tags
+    think_stripped = _THINK_TAG_RE.sub("", stripped).strip()
+
+    # Build candidates: think-stripped text, fenced JSON content, first bracketed JSON object
+    candidates = [think_stripped]
+    fenced = _extract_fenced_json(think_stripped)
+    if fenced is not None:
+        candidates.append(fenced)
+    bracketed = _extract_first_json_object(think_stripped)
+    if bracketed is not None:
+        candidates.append(bracketed)
+
+    for candidate in candidates:
         try:
-            parsed = json.loads(text[start : end + 1])
-        except json.JSONDecodeError as exc:
-            return None, str(exc)
-    if not isinstance(parsed, dict):
-        return None, "raw output JSON is not an object"
-    return parsed, None
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(parsed, dict):
+            return None, "raw output JSON is not an object"
+        return parsed, None
+
+    return None, "raw output is not a JSON object"
+
+
+def _extract_fenced_json(text: str) -> str | None:
+    match = _FENCE_RE.match(text)
+    if not match:
+        return None
+    return match.group(1).strip()
+
+
+def _extract_first_json_object(text: str) -> str | None:
+    decoder = json.JSONDecoder()
+    for start, char in enumerate(text):
+        if char != "{":
+            continue
+        try:
+            parsed, end = decoder.raw_decode(text[start:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return text[start : start + end]
+    return None
 
 
 def _json_dumps(value: Any) -> str:

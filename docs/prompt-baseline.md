@@ -94,8 +94,8 @@ P14 / P14-fast / P8 使用同一做题 prompt；只允许调整模型、shot 数
 - 不要输出解释、分析、证据、草稿或任何 JSON 之外的文字。
 - JSON 字段必须且只能包含：idx、ans_qa_words、ans_qa_sents、choose_id。
 - idx 必须与输入 idx 完全一致。
-- ans_qa_words 是对象，key 必须使用 qa_words 中的原词；重复词语只输出一个 key；value 是该词在诗中的简洁解释。
-- ans_qa_sents 是对象，key 必须使用 qa_sents 中的原句；重复句子只输出一个 key；value 是该句的简洁现代汉语翻译。
+- ans_qa_words 是对象，key 必须逐字复制输入数组中的原始字符串，使用 qa_words 中的原词；包括标点、空格和全半角字符，不能删改句末标点；重复词语只输出一个 key；value 是该词在诗中的简洁解释。
+- ans_qa_sents 是对象，key 必须逐字复制输入数组中的原始字符串，使用 qa_sents 中的原句；包括标点、空格和全半角字符，不能删改句末标点；重复句子只输出一个 key；value 是该句的简洁现代汉语翻译。
 - choose_id 必须从 choose 的选项 ID 中选择一个最符合全诗情感的选项。
 
 输入：
@@ -117,8 +117,8 @@ Few-shot 模板在通用说明后加入 2-5 个完整示例。示例的输出仍
 - 不要输出解释、分析、证据、草稿或任何 JSON 之外的文字。
 - JSON 字段必须且只能包含：idx、ans_qa_words、ans_qa_sents、choose_id。
 - idx 必须与输入 idx 完全一致。
-- ans_qa_words 是对象，key 必须使用 qa_words 中的原词；重复词语只输出一个 key；value 是该词在诗中的简洁解释。
-- ans_qa_sents 是对象，key 必须使用 qa_sents 中的原句；重复句子只输出一个 key；value 是该句的简洁现代汉语翻译。
+- ans_qa_words 是对象，key 必须逐字复制输入数组中的原始字符串，使用 qa_words 中的原词；包括标点、空格和全半角字符，不能删改句末标点；重复词语只输出一个 key；value 是该词在诗中的简洁解释。
+- ans_qa_sents 是对象，key 必须逐字复制输入数组中的原始字符串，使用 qa_sents 中的原句；包括标点、空格和全半角字符，不能删改句末标点；重复句子只输出一个 key；value 是该句的简洁现代汉语翻译。
 - choose_id 必须从 choose 的选项 ID 中选择一个最符合全诗情感的选项。
 
 示例 1 输入：

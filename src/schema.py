@@ -7,6 +7,7 @@ from typing import Any
 INPUT_FIELDS = {"idx", "title", "author", "content", "qa_words", "qa_sents", "choose"}
 OUTPUT_FIELDS = {"idx", "ans_qa_words", "ans_qa_sents", "choose_id"}
 STANDARD_CHOOSE_KEYS = {"A", "B", "C", "D"}
+SENTENCE_FINAL_PUNCTUATION = "。！？!?；;，,.．"
 
 
 def unique_preserve_order(items: Iterable[Any]) -> list[str]:
@@ -136,6 +137,43 @@ def validate_output(output: Mapping[str, Any], task: Mapping[str, Any]) -> dict:
     }
 
 
+def validate_output_punctuation_normalized(
+    output: Mapping[str, Any], task: Mapping[str, Any]
+) -> dict:
+    result = validate_output(output, task)
+    normalized_task = normalize_input(task)
+    required_sents = unique_preserve_order(normalized_task["qa_sents"])
+    answer_sents = result["normalized"]["ans_qa_sents"]
+
+    has_sentence_coverage_error = (
+        "missing_ans_qa_sents" in result["errors"]
+        or "unexpected_ans_qa_sents" in result["errors"]
+    )
+    if has_sentence_coverage_error and _has_punctuation_normalized_sentence_match(
+        answer_sents,
+        required_sents,
+    ):
+        result["errors"] = [
+            error
+            for error in result["errors"]
+            if error not in {"missing_ans_qa_sents", "unexpected_ans_qa_sents"}
+        ]
+        if "punctuation_key_mismatch" not in result["warnings"]:
+            result["warnings"].append("punctuation_key_mismatch")
+        if not _has_empty_punctuation_normalized_sentence_answer(
+            answer_sents,
+            required_sents,
+        ):
+            result["warnings"] = [
+                warning
+                for warning in result["warnings"]
+                if warning != "empty_ans_qa_sents"
+            ]
+        result["valid"] = not result["errors"]
+
+    return result
+
+
 def build_output_from_training(
     raw: Mapping[str, Any], task: Mapping[str, Any] | None = None
 ) -> tuple[dict | None, list[str]]:
@@ -244,3 +282,46 @@ def _check_answer_coverage(
         errors.append(f"unexpected_{field_name}")
     if any(answers.get(key, "") == "" for key in required):
         warnings.append(f"empty_{field_name}")
+
+
+def _has_punctuation_normalized_sentence_match(
+    answers: Mapping[str, str],
+    required_keys: list[str],
+) -> bool:
+    answer_keys = set(answers)
+    required = set(required_keys)
+    if answer_keys == required:
+        return False
+    if len(answer_keys) != len(required):
+        return False
+    normalized_answer_keys = {
+        _strip_sentence_final_punctuation(key)
+        for key in answer_keys
+    }
+    normalized_required_keys = {
+        _strip_sentence_final_punctuation(key)
+        for key in required
+    }
+    if len(normalized_answer_keys) != len(answer_keys):
+        return False
+    if len(normalized_required_keys) != len(required):
+        return False
+    return normalized_answer_keys == normalized_required_keys
+
+
+def _strip_sentence_final_punctuation(value: str) -> str:
+    return value.rstrip(SENTENCE_FINAL_PUNCTUATION)
+
+
+def _has_empty_punctuation_normalized_sentence_answer(
+    answers: Mapping[str, str],
+    required_keys: list[str],
+) -> bool:
+    answer_by_normalized_key = {
+        _strip_sentence_final_punctuation(key): answer
+        for key, answer in answers.items()
+    }
+    return any(
+        answer_by_normalized_key.get(_strip_sentence_final_punctuation(key), "") == ""
+        for key in required_keys
+    )

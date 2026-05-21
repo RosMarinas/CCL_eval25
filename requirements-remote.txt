@@ -1,0 +1,15 @@
+# Remote GPU server dependencies — do NOT add to pyproject.toml.
+# These packages only have Linux wheels; uv lock on macOS will fail.
+# Install on remote via: python3 remote_run.py uv pip install -r requirements-remote.txt
+vllm>=0.21.0
+torch>=2.11.0
+torchvision>=0.26.0
+torchaudio>=2.11.0
+transformers>=5.9.0
+huggingface-hub>=1.15.0
+tokenizers>=0.22.0
+safetensors>=0.7.0
+sentencepiece>=0.2.0
+numpy>=2.3.0
+openai>=2.37.0
+fastapi>=0.136.0
