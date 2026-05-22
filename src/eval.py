@@ -33,8 +33,8 @@ RESULT_FIELDS = [
     "emotion_score",
     "total_score",
     "json_error_rate",
-    "strict_final_json_error_rate",
-    "parser_after_strip_json_error_rate",
+    "hard_json_error_rate",
+    "format_style_error_rate",
     "avg_latency_ms",
     "p95_latency_ms",
     "formatter_call_rate",
@@ -50,8 +50,6 @@ DETAIL_FIELDS = [
     "raw_output",
     "parsed_json",
     "json_valid",
-    "strict_final_json_valid",
-    "parser_after_strip_json_valid",
     "json_error_categories",
     "word_score",
     "translation_score",
@@ -94,12 +92,15 @@ HARD_JSON_ERRORS = {
     "invalid_choose_id",
 }
 
-COVERAGE_ERRORS = {
+# json_error_rate 的核心构成 = HARD_JSON_ERRORS + coverage + non_chinese
+CORE_JSON_ERRORS = HARD_JSON_ERRORS | {
     "missing_word_key",
     "missing_sentence_key",
     "empty_required_answer",
+    "non_chinese_or_unusable",
 }
 
+# 格式/风格问题，剥离后可用的错误
 FORMAT_STYLE_ERRORS = {
     "extra_text",
     "thinking_trace_leak",
@@ -109,8 +110,6 @@ FORMAT_STYLE_ERRORS = {
     "overlong_word_answer",
     "overlong_sentence_answer",
 }
-
-PARSER_STRIPPABLE_ERRORS = {"extra_text", "thinking_trace_leak"}
 
 _SCHEMA_TO_EVAL_ERROR = {
     "missing_output_fields": "missing_top_field",
@@ -174,16 +173,25 @@ def classify_json_errors(
     raw_output: str,
     task: dict[str, Any],
     parsed_json: dict[str, Any] | None = None,
+    parse_errors: list[str] | None = None,
 ) -> list[str]:
-    """Return ordered JSON/schema error labels for one model output."""
+    """Return ordered JSON/schema error labels for one model output.
 
-    parsed_from_raw, errors = parse_json_object(raw_output)
-    parsed = parsed_json if parsed_json is not None else parsed_from_raw
-    if parsed is None:
+    If *parse_errors* and *parsed_json* are both provided, the raw-output
+    extraction step is skipped and the pre-computed labels are reused.
+    """
+
+    if parse_errors is not None and parsed_json is not None:
+        errors = list(parse_errors)
+    else:
+        parsed_from_raw, errors = parse_json_object(raw_output)
+        if parsed_json is None:
+            parsed_json = parsed_from_raw
+    if parsed_json is None:
         return _ordered_errors(errors)
 
-    errors.extend(_local_schema_errors(parsed, task))
-    errors.extend(_validate_output_errors(parsed, task))
+    errors.extend(_local_schema_errors(parsed_json, task))
+    errors.extend(_validate_output_errors(parsed_json, task))
     return _ordered_errors(errors)
 
 
@@ -193,8 +201,6 @@ def make_experiment_record(**kwargs: Any) -> dict[str, Any]:
     defaults = {
         "reasoner_model": "",
         "formatter_model": "",
-        "strict_final_json_error_rate": None,
-        "parser_after_strip_json_error_rate": None,
         "formatter_call_rate": None,
         "formatter_regression_rate": None,
         "retry_rate": 0,
@@ -212,8 +218,6 @@ def make_sample_record(**kwargs: Any) -> dict[str, Any]:
         "raw_output": "",
         "parsed_json": None,
         "json_valid": False,
-        "strict_final_json_valid": False,
-        "parser_after_strip_json_valid": False,
         "json_error_categories": [],
         "word_score": None,
         "translation_score": None,
@@ -302,43 +306,35 @@ def compute_formatter_regression(
 
 
 def compute_json_error_rates(error_categories: list[list[str]]) -> dict[str, float | int]:
-    """Summarize JSON, hard, coverage, and format/style error rates."""
+    """Summarize JSON error rates: core (output unusable) and format (output usable but messy)."""
 
     count = len(error_categories)
     if count == 0:
         return {
             "sample_count": 0,
             "json_error_rate": 0,
-            "strict_final_json_error_rate": 0,
-            "parser_after_strip_json_error_rate": 0,
             "hard_json_error_rate": 0,
-            "coverage_error_rate": 0,
             "format_style_error_rate": 0,
         }
 
-    any_error = 0
-    strict_final_error = 0
-    parser_after_strip_error = 0
-    hard_error = 0
-    coverage_error = 0
-    format_style_error = 0
+    json_errors = 0       # 核心错误（输出不可用）
+    hard_errors = 0       # 严重错误子集
+    format_errors = 0     # 格式问题（输出仍可用）
+
     for categories in error_categories:
         category_set = set(categories)
-        any_error += int(bool(category_set))
-        strict_final_error += int(bool(category_set))
-        parser_after_strip_error += int(bool(category_set - PARSER_STRIPPABLE_ERRORS))
-        hard_error += int(bool(category_set & HARD_JSON_ERRORS))
-        coverage_error += int(bool(category_set & COVERAGE_ERRORS))
-        format_style_error += int(bool(category_set & FORMAT_STYLE_ERRORS))
+        if category_set & CORE_JSON_ERRORS:
+            json_errors += 1
+        if category_set & HARD_JSON_ERRORS:
+            hard_errors += 1
+        if category_set & FORMAT_STYLE_ERRORS:
+            format_errors += 1
 
     return {
         "sample_count": count,
-        "json_error_rate": any_error / count,
-        "strict_final_json_error_rate": strict_final_error / count,
-        "parser_after_strip_json_error_rate": parser_after_strip_error / count,
-        "hard_json_error_rate": hard_error / count,
-        "coverage_error_rate": coverage_error / count,
-        "format_style_error_rate": format_style_error / count,
+        "json_error_rate": json_errors / count,
+        "hard_json_error_rate": hard_errors / count,
+        "format_style_error_rate": format_errors / count,
     }
 
 
@@ -606,4 +602,4 @@ def _has_hard_json_error(errors: list[str]) -> bool:
 
 
 def _has_json_or_coverage_error(errors: list[str]) -> bool:
-    return bool(set(errors) & (HARD_JSON_ERRORS | COVERAGE_ERRORS))
+    return bool(set(errors) & CORE_JSON_ERRORS)

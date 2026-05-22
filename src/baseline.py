@@ -6,10 +6,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
-_THINK_TAG_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.IGNORECASE | re.DOTALL)
-_FENCE_RE = re.compile(r"^\s*```(?:json|JSON)?\s*(.*?)\s*```\s*$", re.DOTALL)
-
-GenerateFn = Callable[[str, dict[str, Any]], str]
+from src.eval import parse_json_object
 
 BASELINE_GROUPS = {"P14", "P14-fast", "P8", "FMT"}
 ANSWER_PROMPT_TYPES = {"zero-shot", "few-shot"}
@@ -45,6 +42,7 @@ class BaselineResult:
     latency_ms: float
     metadata: dict[str, Any]
     validation_error: str | None = None
+    parse_errors: list[str] = field(default_factory=list)
 
     def to_record(self) -> dict[str, Any]:
         record = {
@@ -59,6 +57,8 @@ class BaselineResult:
         }
         if self.validation_error:
             record["validation_error"] = self.validation_error
+        if self.parse_errors:
+            record["parse_errors"] = self.parse_errors
         return record
 
 
@@ -164,9 +164,9 @@ def run_prompt_baseline(
         raw_output = generate_fn(prompt, metadata)
         latency_ms = (time.perf_counter() - start) * 1000
 
-        parsed_json, parse_error = _parse_json_object(raw_output)
-        validation_error = parse_error
+        parsed_json, parse_errors = parse_json_object(raw_output)
         json_valid = parsed_json is not None
+        validation_error = None
         if parsed_json is not None:
             schema_valid, schema_error = _validate_output_if_available(
                 normalized_task,
@@ -186,6 +186,7 @@ def run_prompt_baseline(
                 latency_ms=latency_ms,
                 metadata=metadata,
                 validation_error=validation_error,
+                parse_errors=parse_errors,
             )
         )
     return results
@@ -333,58 +334,6 @@ def _schema_result_to_bool(result: Any) -> tuple[bool, str | None]:
             valid = bool(valid_json) and not invalid_flags and not missing_items
         return valid, None if valid else _json_dumps(result)
     return bool(result), None if result else "schema validation failed"
-
-
-def _parse_json_object(raw_output: str) -> tuple[dict[str, Any] | None, str | None]:
-    text = "" if raw_output is None else str(raw_output)
-    stripped = text.strip()
-    if not stripped:
-        return None, "raw output is not a JSON object"
-
-    # Strip <think>...</think> tags
-    think_stripped = _THINK_TAG_RE.sub("", stripped).strip()
-
-    # Build candidates: think-stripped text, fenced JSON content, first bracketed JSON object
-    candidates = [think_stripped]
-    fenced = _extract_fenced_json(think_stripped)
-    if fenced is not None:
-        candidates.append(fenced)
-    bracketed = _extract_first_json_object(think_stripped)
-    if bracketed is not None:
-        candidates.append(bracketed)
-
-    for candidate in candidates:
-        try:
-            parsed = json.loads(candidate)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(parsed, dict):
-            return None, "raw output JSON is not an object"
-        return parsed, None
-
-    return None, "raw output is not a JSON object"
-
-
-def _extract_fenced_json(text: str) -> str | None:
-    match = _FENCE_RE.match(text)
-    if not match:
-        return None
-    return match.group(1).strip()
-
-
-def _extract_first_json_object(text: str) -> str | None:
-    decoder = json.JSONDecoder()
-    for start, char in enumerate(text):
-        if char != "{":
-            continue
-        try:
-            parsed, end = decoder.raw_decode(text[start:])
-        except json.JSONDecodeError:
-            continue
-        if isinstance(parsed, dict):
-            return text[start : start + end]
-    return None
-
 
 def _json_dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=False)

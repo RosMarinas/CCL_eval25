@@ -100,6 +100,52 @@ class EvalRecorderTest(unittest.TestCase):
         self.assertIn("invalid_choose_id", errors)
         self.assertTrue(set(errors).issubset(JSON_ERROR_CATEGORIES))
 
+    def test_classify_json_errors_skips_reparse_when_parse_errors_provided(self):
+        # parse_errors 和 parsed_json 都提供时，应跳过对 raw_output 的重新解析
+        parsed = {
+            "idx": 7,
+            "ans_qa_words": {"春风": "春天的风"},
+            "ans_qa_sents": {"春风又绿江南岸。": "春风又吹绿了江南岸"},
+            "choose_id": "A",
+        }
+        errors = classify_json_errors(
+            raw_output="this is garbage not json at all",
+            task=SAMPLE_TASK,
+            parsed_json=parsed,
+            parse_errors=["extra_text", "thinking_trace_leak"],
+        )
+        # 使用了预计算的 parse_errors，包含 format 类标签
+        self.assertIn("extra_text", errors)
+        self.assertIn("thinking_trace_leak", errors)
+        # garbage raw_output 没有被重新解析，所以不应出现 parse_error
+        self.assertNotIn("parse_error", errors)
+
+    def test_classify_json_errors_still_parses_when_only_parse_errors_provided(self):
+        # 只提供 parse_errors 但不提供 parsed_json 时，仍需解析 raw_output
+        errors = classify_json_errors(
+            raw_output="not json",
+            task=SAMPLE_TASK,
+            parsed_json=None,
+            parse_errors=["extra_text"],
+        )
+        # raw_output 无法解析，应产生 parse_error
+        self.assertIn("parse_error", errors)
+
+    def test_classify_json_errors_applies_schema_checks_on_provided_parsed_json(self):
+        # 预计算 parse_errors 不应跳过 schema 层面的检查
+        parsed = {"idx": 8, "choose_id": "Z"}  # idx mismatch, missing fields, invalid choose_id
+        errors = classify_json_errors(
+            raw_output="ignored",
+            task=SAMPLE_TASK,
+            parsed_json=parsed,
+            parse_errors=["extra_text"],
+        )
+        self.assertIn("extra_text", errors)       # from parse_errors
+        self.assertIn("idx_mismatch", errors)      # from schema check
+        self.assertIn("missing_top_field", errors)  # from schema check
+        self.assertIn("invalid_choose_id", errors)  # from schema check
+        self.assertNotIn("parse_error", errors)    # no re-parse happened
+
     def test_record_builders_emit_documented_fields(self):
         experiment = make_experiment_record(
             experiment_id="H2-test",
@@ -127,8 +173,8 @@ class EvalRecorderTest(unittest.TestCase):
         self.assertEqual(list(experiment.keys()), RESULT_FIELDS)
         self.assertIsNone(experiment["formatter_call_rate"])
         self.assertEqual(experiment["retry_rate"], 0)
-        self.assertIn("strict_final_json_error_rate", experiment)
-        self.assertIn("parser_after_strip_json_error_rate", experiment)
+        self.assertIn("hard_json_error_rate", experiment)
+        self.assertIn("format_style_error_rate", experiment)
 
         sample = make_sample_record(
             experiment_id="H2-test",
@@ -141,8 +187,6 @@ class EvalRecorderTest(unittest.TestCase):
         self.assertEqual(list(sample.keys()), DETAIL_FIELDS)
         self.assertIsNone(sample["latency_ms"])
         self.assertFalse(sample["formatter_called"])
-        self.assertIn("strict_final_json_valid", sample)
-        self.assertIn("parser_after_strip_json_valid", sample)
 
     def test_compute_formatter_regression_counts_score_json_and_fix_rates(self):
         summary = compute_formatter_regression(
@@ -179,12 +223,12 @@ class EvalRecorderTest(unittest.TestCase):
         )
 
         self.assertEqual(summary["sample_count"], 4)
-        self.assertEqual(summary["json_error_rate"], 3 / 4)
+        # sample 1 (parse_error+missing_word_key) and sample 3 (empty_required_answer) → core errors
+        self.assertEqual(summary["json_error_rate"], 2 / 4)
+        # sample 1 has parse_error → hard error
         self.assertEqual(summary["hard_json_error_rate"], 1 / 4)
-        self.assertEqual(summary["coverage_error_rate"], 2 / 4)
+        # sample 2 has extra_text+overlong_word_answer → format error
         self.assertEqual(summary["format_style_error_rate"], 1 / 4)
-        self.assertEqual(summary["strict_final_json_error_rate"], 3 / 4)
-        self.assertEqual(summary["parser_after_strip_json_error_rate"], 3 / 4)
 
     def test_task_error_template_returns_expected_shapes(self):
         word_template = task_error_template("word")

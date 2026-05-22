@@ -4,7 +4,7 @@
 
 ```text
 最佳 8B 级 reasoner，优先 Qwen3-8B
--> B8 answer-only QLoRA
+-> [B8 answer-only QLoRA，条件执行]
 -> BC8 mixed distillation
 -> BC8-final answer-only replay
 ```
@@ -26,6 +26,16 @@
 ## 2. B8 answer-only QLoRA 配置
 
 B8 的目标是把最佳 8B 级 reasoner 适配到 CCL25 的最终输出格式，优先保证合法、完整、简洁的 JSON，而不是训练推理文本。
+
+**B8 条件执行规则：** B8 不再是必经阶段。P8 baseline 完成后根据 Core 错误率决定：
+
+| P8 Core 错误率 | B8 执行策略 |
+| ---: | --- |
+| < 5% | B8 缩短为格式确认（少量 steps / 0.3 epoch），或直接从基座进入 BC8 |
+| 5% – 15% | 执行完整 B8，以 `json_error_rate` 和 `missing_word_key` 率早停 |
+| > 15% | 完整 B8，且提高 answer-only 数据比例和 epoch 数 |
+
+判断依据以 `json_error_rate`（Core 错误）为准，不包含 `extra_text` 和 `thinking_trace_leak`（这两类由 parser 统一处理，不应迫使模型额外训练）。若主要错误集中在 `missing_word_key` / `missing_sentence_key` / `empty_required_answer`，B8 仍有价值；若仅剩 format 类错误，B8 可跳过。
 
 ### 2.1 数据
 
@@ -54,6 +64,8 @@ B8 的目标是把最佳 8B 级 reasoner 适配到 CCL25 的最终输出格式�
 | packing | 默认关闭 | 避免多题拼接导致 JSON 边界学习混乱；若实现能严格加边界 token，可单独消融 |
 
 ### 2.3 B8 验收指标
+
+若 B8 被执行，验收标准如下：
 
 - JSON 严格解析错误率低于 P8 prompt baseline。
 - `idx` 原样传递，`ans_qa_words` 与 `ans_qa_sents` 覆盖去重后的所有 key。

@@ -4,16 +4,18 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Callable
+from typing import Any, Callable, Union
 
 try:
     from src.schema import unique_preserve_order as _schema_unique_preserve_order
 except ImportError:
     _schema_unique_preserve_order = None
 
+from src.eval import parse_json_object as _parse_json_object_eval
+
 
 Report = dict[str, Any]
-FormatterFn = Callable[[dict[str, Any]], str | dict[str, Any]]
+FormatterFn = Callable[[dict[str, Any]], Union[str, dict[str, Any]]]
 
 FINAL_FIELDS = {"idx", "ans_qa_words", "ans_qa_sents", "choose_id"}
 WORD_LIMIT = 40
@@ -34,7 +36,11 @@ def unique_preserve_order(items: list[Any] | None) -> list[Any]:
 
 
 def parse_reasoner_output(raw_output: str | dict[str, Any] | None) -> dict[str, Any] | None:
-    """Parse a JSON object, allowing markdown fences or small text wrappers."""
+    """Parse a JSON object from raw model output.
+
+    Uses the canonical eval.py parser so that think tags, markdown fences
+    and extra-text wrappers are stripped uniformly across the codebase.
+    """
     if isinstance(raw_output, dict):
         return raw_output
     if raw_output is None:
@@ -46,6 +52,12 @@ def parse_reasoner_output(raw_output: str | dict[str, Any] | None) -> dict[str, 
     if not text:
         return None
 
+    parsed, _ = _parse_json_object_eval(text)
+    return parsed
+
+    # Dead code: fallback path kept for reference.
+    # These functions are only reached if the canonical parser above fails,
+    # which should not happen in normal operation.
     fenced = re.search(r"```(?:json)?\s*(.*?)```", text, flags=re.DOTALL | re.IGNORECASE)
     if fenced:
         text = fenced.group(1).strip()

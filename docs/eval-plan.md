@@ -5,7 +5,7 @@
 ## 1. 评测原则
 
 - 输入和输出 schema 以 `docs/data-schema.md` 为准，最终输出只评测 `idx`、`ans_qa_words`、`ans_qa_sents`、`choose_id`。
-- 评分规则延续已确认策略：优先使用官方评测脚本；官方脚本缺失时，内部临时总分为 `0.30 * 词义分 + 0.40 * 翻译分 + 0.30 * 情感分`。
+- 评分规则延续已确认策略：优先使用官方评测脚本。官方脚本缺失时，内部临时总分按官方 Task1:Task2 = 0.5:0.5 权重计算：`0.25 * 词义分 + 0.25 * 翻译分 + 0.50 * 情感分`。Task1 内部词义与翻译等权分割为暂定假设，待官方评测脚本发布后以官方为准。
 - JSON 错误率、formatter 改坏率和平均延迟独立记录，不并入内部临时总分。
 - 所有实验必须记录完整实验 ID：模型全名、参数规模、量化方式、推理后端、thinking/non-thinking 模式、prompt 类型、shot 数和主要解码参数。
 - 同一轮比较必须使用同一 dev split、同一 few-shot 池、同一评分脚本或同一人工评分规则。
@@ -34,7 +34,7 @@
 | `translation_score` | number | `ans_qa_sents` 平均分。 |
 | `emotion_score` | number | `choose_id` 平均分。 |
 | `total_score` | number | 官方总分；无官方脚本时用内部临时权重。 |
-| `json_error_rate` | number | final 输出出现 JSON 或 schema 错误的样本比例。 |
+| `json_error_rate` | number | final 输出出现 Core 错误（输出不可用）的样本比例。 |
 | `avg_latency_ms` | number | 单样本端到端平均延迟。 |
 | `p95_latency_ms` | number | 单样本端到端 P95 延迟。 |
 | `formatter_call_rate` | number | harness 中调用 formatter 的样本比例；非 harness 为空。 |
@@ -49,6 +49,7 @@
 | --- | --- |
 | `experiment_id`、`idx`、`raw_output`、`parsed_json` | 复现单样本结果。 |
 | `json_valid`、`json_error_categories` | JSON 与 schema 校验结果。 |
+| `core_valid` | `bool` | 无 Core 错误，输出可用于下游评分。 |
 | `word_score`、`translation_score`、`emotion_score`、`total_score` | 单样本任务分。 |
 | `latency_ms`、`reasoner_latency_ms`、`formatter_latency_ms` | 延迟拆分。 |
 | `formatter_called`、`reasoner_retried`、`fallback_used` | harness 决策路径。 |
@@ -56,31 +57,43 @@
 
 ## 3. JSON 错误分类
 
-JSON 错误可以多标签记录；`json_error_rate` 统计出现任意错误标签的样本比例。
+JSON 错误分为两类，一个样本可同时有 core 和 format 错误。
+
+### Core 错误（输出不可用）
+
+输出存在以下错误时无法用于下游评分或提交。
 
 | 错误类别 | 触发条件 |
 | --- | --- |
-| `parse_error` | 输出无法解析为单个 JSON 对象。 |
-| `extra_text` | JSON 前后含解释、Markdown、代码块或其他非 JSON 文本。 |
-| `missing_top_field` | 缺少 `idx`、`ans_qa_words`、`ans_qa_sents` 或 `choose_id`。 |
-| `extra_top_field` | final 输出包含 `evidence`、`draft_answer`、`analysis` 等额外顶层字段。 |
+| `parse_error` | 原始输出经剥离（think tags、fence、extra text）后仍无法提取为单个 JSON 对象。 |
+| `missing_top_field` | 解析后的 JSON 缺少 `idx`、`ans_qa_words`、`ans_qa_sents` 或 `choose_id` 之一。 |
 | `idx_mismatch` | 输出 `idx` 与输入 `idx` 不一致。 |
 | `wrong_field_type` | 顶层字段或答案字段类型错误，例如答案对象输出成数组。 |
 | `missing_word_key` | `ans_qa_words` 未覆盖 `qa_words` 去重后的目标词。 |
-| `extra_word_key` | `ans_qa_words` 出现不来自 `qa_words` 的 key。 |
 | `missing_sentence_key` | `ans_qa_sents` 未覆盖 `qa_sents` 去重后的目标句。 |
-| `extra_sentence_key` | `ans_qa_sents` 出现不来自 `qa_sents` 的 key。 |
 | `empty_required_answer` | 目标词或目标句答案为空字符串、`null` 或空对象。 |
 | `invalid_choose_id` | `choose_id` 不属于原题 `choose` 的选项 ID。 |
-| `overlong_word_answer` | 词义答案超过 40 个中文字符，按 harness 规则标记。 |
-| `overlong_sentence_answer` | 句子翻译超过 80 个中文字符，按 harness 规则标记。 |
 | `non_chinese_or_unusable` | 答案主体不是中文，或明显不可用于提交。 |
 
-汇总时同时报告：
+### Format 错误（输出不干净）
 
-- `hard_json_error_rate`：`parse_error`、`missing_top_field`、`idx_mismatch`、`wrong_field_type`、`invalid_choose_id` 中任一出现的比例。
-- `coverage_error_rate`：`missing_word_key`、`missing_sentence_key`、`empty_required_answer` 中任一出现的比例。
-- `format_style_error_rate`：`extra_text`、`extra_top_field`、`extra_word_key`、`extra_sentence_key`、`overlong_word_answer`、`overlong_sentence_answer` 中任一出现的比例。
+原始输出包含不符合格式规范的文本，但 parser 已成功剥离、JSON 内容可用。
+
+| 错误类别 | 触发条件 |
+| --- | --- |
+| `extra_text` | JSON 前后含解释、Markdown fence、代码块或其他非 JSON 文本。 |
+| `thinking_trace_leak` | 输出包含 `<think>` 标签或显式推理过程标记。 |
+| `extra_top_field` | 解析后的 JSON 包含 `evidence`、`draft_answer`、`analysis` 等额外顶层字段。 |
+| `extra_word_key` | `ans_qa_words` 出现不来自 `qa_words` 的 key。 |
+| `extra_sentence_key` | `ans_qa_sents` 出现不来自 `qa_sents` 的 key。 |
+| `overlong_word_answer` | 词义答案超过 40 个中文字符。 |
+| `overlong_sentence_answer` | 句子翻译超过 80 个中文字符。 |
+
+### 汇总指标
+
+- `json_error_rate`：出现任一 **Core 错误**的样本比例。回答「输出能不能用」。
+- `hard_json_error_rate`：`parse_error`、`missing_top_field`、`idx_mismatch`、`wrong_field_type`、`invalid_choose_id` 中任一出现的比例。Core 错误的严重子集。
+- `format_style_error_rate`：出现任一 **Format 错误**的样本比例。回答「输出干不干净」。
 
 ## 4. Formatter 改坏率统计方式
 
