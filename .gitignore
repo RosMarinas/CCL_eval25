@@ -11,4 +11,6 @@ wandb/
 uv.lock
 .python-version
 
-
+# Server credentials - do not track
+sync.sh
+remote_run.py
