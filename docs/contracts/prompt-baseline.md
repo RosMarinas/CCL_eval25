@@ -11,9 +11,9 @@
 
 依赖：
 
-- 统一输入和最终输出 schema：`docs/data-schema.md`
-- harness 输入输出与 validator 规则：`docs/harness.md`
-- 模型候选、license、参数量和部署支持：`docs/model-research.md`
+- 统一输入和最终输出 schema：`docs/contracts/data-schema.md`
+- harness 输入输出与 validator 规则：`docs/contracts/harness.md`
+- 模型候选、license、参数量和部署支持：`docs/reports/model-research.md`
 
 本文只定义实验协议和 prompt 模板。具体模型名称由模型调研确定；第一轮不使用 Qwen3.5-9B 作为 P8 主候选。
 
@@ -63,7 +63,7 @@
 暂缓项：
 
 - Qwen3.5-9B 暂不进入第一轮；如模型调研证明其 license、vLLM 支持、参数预算和效果明显更合适，再作为第二轮备选。
-- DeepSeek-R1-Distill-Qwen、Phi-4 / Phi-4-mini、gpt-oss-20b 等暂缓；原因见 `docs/model-research.md`。
+- DeepSeek-R1-Distill-Qwen、Phi-4 / Phi-4-mini、gpt-oss-20b 等暂缓；原因见 `docs/reports/model-research.md`。
 - 需要自定义推理框架、闭源权重、license 不清晰或总参数预算难以确认的模型暂缓。
 
 ## 3. 通用生成约束
@@ -180,10 +180,14 @@ FMT 输入复用 harness 的 formatter input：
       "sentences": {},
       "emotion": []
     },
+    "sentiment": {
+      "primary": "",
+      "secondary": [],
+      "rationale": ""
+    },
     "draft_answer": {
       "ans_qa_words": {},
-      "ans_qa_sents": {},
-      "choose_id": "D"
+      "ans_qa_sents": {}
     }
   },
   "validator_report": {
@@ -191,7 +195,8 @@ FMT 输入复用 harness 的 formatter input：
     "missing_fields": [],
     "missing_words": [],
     "missing_sentences": [],
-    "invalid_choose_id": false,
+    "sentiment_primary_missing": false,
+    "sentiment_not_in_vocab": false,
     "overlong_fields": [],
     "suspected_conflicts": []
   }
@@ -206,7 +211,9 @@ FMT 输出必须是最终 JSON，不能输出 `evidence`、`draft_answer`、`val
 你是古诗词理解任务的 formatter / verifier。
 
 输入包括 task、reasoner_output 和 validator_report。
-你的任务是把 reasoner_output.draft_answer 整理成最终提交 JSON，并做轻量校验。
+你的任务：
+1. 把 reasoner_output.draft_answer 整理成最终提交 JSON。
+2. 根据 reasoner_output.sentiment 分析和 task.choose 选项，生成 choose_id。
 
 必须遵守：
 1. 默认相信 draft_answer，不要重新做题。
@@ -215,8 +222,8 @@ FMT 输出必须是最终 JSON，不能输出 `evidence`、`draft_answer`、`val
 4. idx 必须使用 task.idx。
 5. ans_qa_words 的 key 必须覆盖 task.qa_words 去重后的词语。
 6. ans_qa_sents 的 key 必须覆盖 task.qa_sents 去重后的句子。
-7. choose_id 必须来自 task.choose 的选项 ID。
-8. 只在 validator_report 指出结构问题、缺项、非法选项、过长答案或明显证据冲突时，才轻微修改 draft_answer。
+7. choose_id 必须来自 task.choose 的选项 ID。优先根据 sentiment.primary 与选项文本的语义匹配程度选择；如有歧义，参考 sentiment.secondary 和 sentiment.rationale。
+8. 只在 validator_report 指出结构问题、缺项或过长答案时，才轻微修改 draft_answer。
 9. 如果缺项无法根据 draft_answer 和 evidence 补齐，使用空字符串占位，不要发明长解释。
 
 输入：

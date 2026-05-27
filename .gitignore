@@ -6,6 +6,12 @@ __pycache__/
 checkpoints/
 logs/
 wandb/
+data/splits/
+data/teacher/
+data/training/
+data/harness/
+data/fewshot/
+data/baseline/e3-dev*/
 .claude/
 .antigravitycli/
 uv.lock
@@ -14,3 +20,4 @@ uv.lock
 # Server credentials - do not track
 sync.sh
 remote_run.py
+api-key.txt

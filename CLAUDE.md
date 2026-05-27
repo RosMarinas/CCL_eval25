@@ -74,7 +74,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ## 环境
 - 使用 uv 作为包管理器，通过修改 pyproject.toml 来添加新的依赖，使用 `uv run` 来运行代码。
-- 本地环境为 macOS，不要在本地直接运行代码。项目代码会通过 `sync.sh` 自动同步到 Linux 服务器。
+- 本地环境为 macOS，不要在本地直接运行代码。项目代码会通过 `sync.sh` 自动同步到 Linux 服务器，除非出现问题，否则你不需要手动同步
   你只需要在本地修改代码。
 - 依赖管理：
   - 轻量级/跨平台依赖：本地 `uv add <包名>`，然后执行 `python3 remote_run.py uv pip install -e .` 同步到服务器。

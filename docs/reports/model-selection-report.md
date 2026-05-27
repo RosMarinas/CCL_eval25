@@ -1,6 +1,6 @@
 # E2a Candidate Gate Report
 
-本文基于 `docs/baseline-smoke-results.md` 和 `data/baseline/smoke-summary.json` 做候选进入正式 dev baseline 的 gate 判断。本文不做最终模型选择，也不比较任务得分；最终选择必须等 E3 在同一 dev split 上完成词义、翻译、情感和 JSON 稳定性评测后再定。
+本文基于 `docs/reports/baseline-smoke-results.md` 和 `data/baseline/smoke-summary.json` 做候选进入正式 dev baseline 的 gate 判断。本文不做最终模型选择，也不比较任务得分；最终选择必须等 E3 在同一 dev split 上完成词义、翻译、情感和 JSON 稳定性评测后再定。
 
 ## 1. Smoke 结论
 

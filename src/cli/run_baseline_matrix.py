@@ -1,13 +1,13 @@
 """
-E3 dev-50 prompt-only baseline runner.
+E3 dev-100 prompt-only baseline runner.
 
 Runs all 8 experiments sequentially via vLLM on the remote GPU server.
-Each model generates answers for the first 50 eval samples.
+Each model generates answers for the first 100 eval samples.
 Per-sample errors are isolated; consecutive failures trigger early abort.
 Completed models are checkpointed so a restart skips finished work.
 
 Usage:
-    python3 remote_run.py python src/baseline_runner.py
+    python3 remote_run.py python src/cli/run_baseline_matrix.py
 """
 
 from __future__ import annotations
@@ -30,15 +30,15 @@ from src.eval import CORE_JSON_ERRORS, classify_json_errors, compute_json_error_
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_PATH = ROOT / "data" / "eval_data.json"
-E3_DIR = ROOT / "data" / "baseline" / "e3-dev50"
-DOC_PATH = ROOT / "docs" / "e3-dev50-results.md"
+E3_DIR = ROOT / "data" / "baseline" / "e3-dev100"
+DOC_PATH = ROOT / "docs" / "e3-dev100-results.md"
 MASTER_DETAIL_PATH = E3_DIR / "results.jsonl"
 MASTER_SUMMARY_PATH = E3_DIR / "summary.json"
 FAILURE_PATH = E3_DIR / "failures.jsonl"
 VLLM_PORT = 8000
 API_URL = f"http://127.0.0.1:{VLLM_PORT}/v1/chat/completions"
 
-DEV_SPLIT_SIZE = 50
+DEV_SPLIT_SIZE = 100
 GENERATE_TIMEOUT = int(os.environ.get("E3_GENERATE_TIMEOUT", "240"))
 VLLM_LOAD_TIMEOUT = int(os.environ.get("E3_VLLM_LOAD_TIMEOUT", "3600"))
 MAX_CONSECUTIVE_FAILURES = 5
@@ -122,7 +122,7 @@ EXPERIMENTS: list[dict[str, Any]] = [
 
 
 def baseline_runner() -> int:
-    """Run the full E3 dev-50 baseline matrix and write all outputs."""
+    """Run the full E3 dev-100 baseline matrix and write all outputs."""
     E3_DIR.mkdir(parents=True, exist_ok=True)
     (E3_DIR / "logs").mkdir(parents=True, exist_ok=True)
 
@@ -430,7 +430,7 @@ def _next_step_for(error: str) -> str:
         return "Inspect vLLM log for server crash; may need to restart model."
     if "port 8000" in lowered:
         return "Stop or move the existing service before retrying."
-    return "Inspect the per-model vLLM log under data/baseline/e3-dev50/logs/."
+    return "Inspect the per-model vLLM log under data/baseline/e3-dev100/logs/."
 
 
 # ============================================================
@@ -604,7 +604,7 @@ def _render_report(
     detail_paths: list[Path],
 ) -> str:
     lines = [
-        "# E3 dev-50 Baseline Results",
+        "# E3 dev-100 Baseline Results",
         "",
         f"Generated at: {time.strftime('%Y-%m-%d %H:%M:%S %z')}",
         "",
@@ -653,7 +653,7 @@ def _render_report(
         "",
         f"All vLLM processes cleaned up: `{cleaned}`.",
         "",
-        f"Per-model details: `data/baseline/e3-dev50/<experiment_id>.jsonl`",
+        f"Per-model details: `data/baseline/e3-dev100/<experiment_id>.jsonl`",
         f"Machine-readable summary: `{MASTER_SUMMARY_PATH.relative_to(ROOT)}`",
         f"Failures: `{FAILURE_PATH.relative_to(ROOT)}`",
         "",

@@ -4,8 +4,9 @@
 
 ## 1. 评测原则
 
-- 输入和输出 schema 以 `docs/data-schema.md` 为准，最终输出只评测 `idx`、`ans_qa_words`、`ans_qa_sents`、`choose_id`。
+- 输入和输出 schema 以 `docs/contracts/data-schema.md` 为准，最终输出只评测 `idx`、`ans_qa_words`、`ans_qa_sents`、`choose_id`。
 - 评分规则延续已确认策略：优先使用官方评测脚本。官方脚本缺失时，内部临时总分按官方 Task1:Task2 = 0.5:0.5 权重计算：`0.25 * 词义分 + 0.25 * 翻译分 + 0.50 * 情感分`。Task1 内部词义与翻译等权分割为暂定假设，待官方评测脚本发布后以官方为准。
+- 情感分采用两阶段分解评估：(a) **Reasoner 情感分析准确率**——`sentiment.primary` 是否正确反映诗歌情感；(b) **Formatter 情感映射准确率**——sentiment→choose_id 映射是否正确。仅映射准确率（即 choose_id 准确性）计入最终提交得分；Reasoner 情感分析准确率用于诊断和消融分析，不计入提交总分。
 - JSON 错误率、formatter 改坏率和平均延迟独立记录，不并入内部临时总分。
 - 所有实验必须记录完整实验 ID：模型全名、参数规模、量化方式、推理后端、thinking/non-thinking 模式、prompt 类型、shot 数和主要解码参数。
 - 同一轮比较必须使用同一 dev split、同一 few-shot 池、同一评分脚本或同一人工评分规则。
@@ -32,7 +33,9 @@
 | `sample_count` | integer | 计入汇总的样本数。 |
 | `word_score` | number | `ans_qa_words` 平均分。 |
 | `translation_score` | number | `ans_qa_sents` 平均分。 |
-| `emotion_score` | number | `choose_id` 平均分。 |
+| `emotion_score` | number | `choose_id` 平均分（经 Formatter 映射后的最终情感选择准确率，即情感映射准确率）。 |
+| `sentiment_primary_accuracy` | number | Reasoner `sentiment.primary` 准确率（是否匹配诗歌实际情感，需要 gold sentiment label 或人工评判）。 |
+| `sentiment_mapping_accuracy` | number | Formatter 将 sentiment→choose_id 映射的准确率（分母为 Reasoner 情感分析正确的样本数，或全部样本）。 |
 | `total_score` | number | 官方总分；无官方脚本时用内部临时权重。 |
 | `json_error_rate` | number | final 输出出现 Core 错误（输出不可用）的样本比例。 |
 | `avg_latency_ms` | number | 单样本端到端平均延迟。 |
@@ -51,6 +54,9 @@
 | `json_valid`、`json_error_categories` | JSON 与 schema 校验结果。 |
 | `core_valid` | `bool` | 无 Core 错误，输出可用于下游评分。 |
 | `word_score`、`translation_score`、`emotion_score`、`total_score` | 单样本任务分。 |
+| `reasoner_sentiment` | Reasoner 输出的 `sentiment` 内容（primary + secondary + rationale）。 |
+| `sentiment_correct` | Reasoner 情感分析是否正确（sentiment.primary 是否匹配诗歌实际情感）。 |
+| `mapping_correct` | Formatter 映射是否正确（Reasoner 情感分析正确的情况下，choose_id 是否选对）。 |
 | `latency_ms`、`reasoner_latency_ms`、`formatter_latency_ms` | 延迟拆分。 |
 | `formatter_called`、`reasoner_retried`、`fallback_used` | harness 决策路径。 |
 | `draft_answer`、`final_answer` | 仅 harness / formatter 实验必填，用于计算改坏率。 |
@@ -72,7 +78,9 @@ JSON 错误分为两类，一个样本可同时有 core 和 format 错误。
 | `missing_word_key` | `ans_qa_words` 未覆盖 `qa_words` 去重后的目标词。 |
 | `missing_sentence_key` | `ans_qa_sents` 未覆盖 `qa_sents` 去重后的目标句。 |
 | `empty_required_answer` | 目标词或目标句答案为空字符串、`null` 或空对象。 |
-| `invalid_choose_id` | `choose_id` 不属于原题 `choose` 的选项 ID。 |
+| `invalid_choose_id` | 最终输出 `choose_id` 不属于原题 `choose` 的选项 ID（仅校验 final 输出，Reasoner 中间输出不含 choose_id）。 |
+| `missing_sentiment` | Reasoner 中间输出缺少 `sentiment` 字段（仅 Reasoner 输出校验）。 |
+| `invalid_sentiment_primary` | Reasoner `sentiment.primary` 不在受控词汇表中（参见 docs/contracts/data-schema.md 第 3.2 节；仅 Reasoner 输出校验）。 |
 | `non_chinese_or_unusable` | 答案主体不是中文，或明显不可用于提交。 |
 
 ### Format 错误（输出不干净）
@@ -103,7 +111,7 @@ Formatter 改坏率只在 FMT、H2、H3、H4、BCD-H 等存在 formatter 的实�
 
 1. 将 `draft_answer` 注入 `idx` 后按最终输出 schema 校验。
 2. 分别计算 draft 与 final 的 `word_score`、`translation_score`、`emotion_score`、`total_score`。
-3. 若 draft 在某一子任务满分或达到人工确认的正确阈值，而 final 在同一子任务低于该阈值，记为该子任务 formatter regression。
+3. 若 draft 在某一子任务满分或达到人工确认的正确阈值，而 final 在同一子任务低于该阈值，记为该子任务 formatter regression。对于情感子任务，draft（Reasoner 输出）不含 `choose_id`，因此情感回归定义为：(a) Reasoner 情感分析正确但 Formatter 映射到错误选项（映射回归），或 (b) Formatter 修改了原本正确的 `sentiment` 分析（情感回归，仅 formatter 允许修改 sentiment 时适用）。
 4. 若 `draft_total_score > final_total_score` 且差值不小于 `0.05`，记为总分 regression。
 5. 若 draft JSON 合法但 final 产生任一 hard JSON error，也记为 regression。
 
@@ -114,7 +122,8 @@ Formatter 改坏率只在 FMT、H2、H3、H4、BCD-H 等存在 formatter 的实�
 | `formatter_regression_rate` | 出现任一子任务 regression、总分 regression 或 hard JSON regression 的样本比例。 |
 | `formatter_word_regression_rate` | 词义从正确变错的样本比例。 |
 | `formatter_translation_regression_rate` | 翻译从正确变错的样本比例。 |
-| `formatter_emotion_regression_rate` | 情感从正确变错的样本比例。 |
+| `formatter_emotion_regression_rate` | 情感选择（choose_id）从正确变错的样本比例。draft 无 choose_id 时定义为：Reasoner 情感分析正确但 Formatter 映射到错误选项的比例（映射回归）。 |
+| `formatter_sentiment_regression_rate` | Reasoner 情感分析原本正确，Formatter 改变 `sentiment` 内容后变错的样本比例（仅 Formatter 能够改 sentiment 时适用）。 |
 | `formatter_json_regression_rate` | draft 合法但 final 出现 hard JSON error 的样本比例。 |
 | `formatter_fix_rate` | draft 有 JSON / coverage 错误，final 修复且未降低总分的样本比例。 |
 | `formatter_net_gain` | `mean(final_total_score - draft_total_score)`。 |
@@ -162,10 +171,15 @@ Formatter 改坏率只在 FMT、H2、H3、H4、BCD-H 等存在 formatter 的实�
 | `choose` | 原题选项。 |
 | `gold_choose_id` | 正确选项。 |
 | `pred_choose_id` | 模型选项。 |
-| `error_type` | `opposite_emotion`、`near_option_confusion`、`local_cue_overfit`、`ignored_title_author`、`formatter_changed`、`invalid_option`。 |
+| `error_type` | `opposite_emotion`、`near_option_confusion`、`local_cue_overfit`、`ignored_title_author`、`formatter_changed`、`invalid_option`、`sentiment_misanalysis`、`sentiment_mapping_error`、`sentiment_vocab_mismatch`。 |
 | `key_evidence` | 支持正确选项的关键词或句子。 |
 | `model_evidence` | reasoner evidence 或模型输出中的依据。 |
 | `fix_hint` | 是否需要 teacher-critique、情感 few-shot 或 formatter 冲突规则。 |
+
+新增两阶段情感错误类型说明：
+- `sentiment_misanalysis`：Reasoner 情感分析本身错误，`sentiment.primary` 标签不匹配诗歌实际情感。
+- `sentiment_mapping_error`：Reasoner 情感分析正确但 Formatter 将其映射到错误选项（映射回归）。
+- `sentiment_vocab_mismatch`：`sentiment.primary` 不在受控词汇表中（参见 docs/contracts/data-schema.md 第 3.2 节）。
 
 ### 5.4 JSON / Harness 错误分析
 
@@ -184,21 +198,21 @@ Formatter 改坏率只在 FMT、H2、H3、H4、BCD-H 等存在 formatter 的实�
 
 ### 6.1 Baseline 消融表
 
-| 实验 | 配置 | 目标 | 词义分 | 翻译分 | 情感分 | 总分 | JSON 错误率 | 平均延迟 | 备注 |
-| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| P14 | Qwen3-14B prompt baseline | 14B prompt 上限 | | | | | | | |
-| P14-fast | Qwen3-14B-AWQ prompt baseline | 14B 量化速度/效果对照 | | | | | | | |
-| P8 | 多个 8B 级模型 prompt baseline | 选择 reasoner 微调基座 | | | | | | | |
-| FMT | Qwen3-8B / Gemma 4 E4B formatter baseline | 选择 formatter / verifier | | | | | | | |
+| 实验 | 配置 | 目标 | 词义分 | 翻译分 | 情感分 | 情感分析准确率 | 总分 | JSON 错误率 | 平均延迟 | 备注 |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| P14 | Qwen3-14B prompt baseline | 14B prompt 上限 | | | | | | | | |
+| P14-fast | Qwen3-14B-AWQ prompt baseline | 14B 量化速度/效果对照 | | | | | | | | |
+| P8 | 多个 8B 级模型 prompt baseline | 选择 reasoner 微调基座 | | | | | | | | |
+| FMT | Qwen3-8B / Gemma 4 E4B formatter baseline | 选择 formatter / verifier | | | | | | | | |
 
 ### 6.2 BC 训练消融表
 
-| 实验 | 训练目标 | 数据组成 | 对照对象 | 词义分 | 翻译分 | 情感分 | 总分 | JSON 错误率 | 备注 |
-| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| P8 | prompt-only 8B 基座 | 无训练 | baseline | | | | | | |
-| B8 | answer-only QLoRA | 输入题目 -> 最终 JSON | P8 | | | | | | |
-| BC8 | mixed distillation | answer-only 60% / short-evidence 30% / teacher-critique 10% | B8 | | | | | | |
-| BC8-final | answer-only replay | 从最佳 BC8 继续短训，只输出最终 JSON | BC8 | | | | | | |
+| 实验 | 训练目标 | 数据组成 | 对照对象 | 词义分 | 翻译分 | 情感分 | 情感分析准确率 | 情感映射准确率 | 总分 | JSON 错误率 | 备注 |
+| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| P8 | prompt-only 8B 基座 | 无训练 | baseline | | | | | | | | |
+| B8 | answer-only QLoRA | 输入题目 -> 最终 JSON | P8 | | | | | | | | |
+| BC8 | mixed distillation | answer-only 60% / short-evidence 30% / teacher-critique 10% | B8 | | | | | | | | |
+| BC8-final | answer-only replay | 从最佳 BC8 继续短训，只输出最终 JSON | BC8 | | | | | | | | |
 
 重点判断：
 
@@ -208,13 +222,13 @@ Formatter 改坏率只在 FMT、H2、H3、H4、BCD-H 等存在 formatter 的实�
 
 ### 6.3 Harness 消融表
 
-| 实验 | 配置 | 对照对象 | 词义分 | 翻译分 | 情感分 | 总分 | JSON 错误率 | formatter 改坏率 | 平均延迟 | 备注 |
-| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| BC8 | 单模型 final JSON | P8 / B8 | | | | | | | | |
-| H1 | BC8-final + 规则 postprocess | BC8-final | | | | | | | | |
-| H2 | BC8-final reasoner + Gemma formatter | H1 | | | | | | | | |
-| H3 | BC8-final reasoner + 8B formatter | H2 | | | | | | | | |
-| H4 | 14B prompt reasoner + formatter | P14 / H2 | | | | | | | | |
+| 实验 | 配置 | 对照对象 | 词义分 | 翻译分 | 情感分 | 情感分析准确率 | 情感映射准确率 | 总分 | JSON 错误率 | formatter 改坏率 | 平均延迟 | 备注 |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| BC8 | 单模型 final JSON | P8 / B8 | | | | | | | | | |
+| H1 | BC8-final + 规则 postprocess | BC8-final | | | | | | | | | |
+| H2 | BC8-final reasoner + Gemma formatter | H1 | | | | | | | | | |
+| H3 | BC8-final reasoner + 8B formatter | H2 | | | | | | | | | |
+| H4 | 14B prompt reasoner + formatter | P14 / H2 | | | | | | | | | |
 
 重点判断：
 
@@ -225,12 +239,12 @@ Formatter 改坏率只在 FMT、H2、H3、H4、BCD-H 等存在 formatter 的实�
 
 ### 6.4 BCD 消融表
 
-| 实验 | 配置 | 对照对象 | 词义分 | 翻译分 | 情感分 | 总分 | JSON 错误率 | 平均延迟 | 部署风险 | 备注 |
-| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
-| BC8-final | 主学生模型 replay 产物 | P8 / B8 / BC8 | | | | | | | 低 | |
-| H2 | BC8-final reasoner + Gemma formatter | BC8-final / H1 | | | | | | | 中 | |
-| BCD1 | BC8-final + 循环 block 继续训练 | BC8-final | | | | | | | 高 | |
-| BCD-H | BCD1 + formatter | BCD1 / H2 | | | | | | | 高 | |
+| 实验 | 配置 | 对照对象 | 词义分 | 翻译分 | 情感分 | 情感分析准确率 | 情感映射准确率 | 总分 | JSON 错误率 | 平均延迟 | 部署风险 | 备注 |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| BC8-final | 主学生模型 replay 产物 | P8 / B8 / BC8 | | | | | | | | | 低 | |
+| H2 | BC8-final reasoner + Gemma formatter | BC8-final / H1 | | | | | | | | | 中 | |
+| BCD1 | BC8-final + 循环 block 继续训练 | BC8-final | | | | | | | | | 高 | |
+| BCD-H | BCD1 + formatter | BCD1 / H2 | | | | | | | | | 高 | |
 
 BCD 放弃条件：
 

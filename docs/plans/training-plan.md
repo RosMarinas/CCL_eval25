@@ -15,13 +15,13 @@
 
 | 阶段 | 输入 | 训练输出 | 用途 |
 | --- | --- | --- | --- |
-| B8 answer-only | 统一输入题目 | 最终 JSON | 学习提交 schema、字段覆盖、答案长度和选项合法性 |
+| B8 answer-only | 统一输入题目 | 最终 JSON（训练源不含 choose 选项时 choose_id=""） | 学习提交 schema、字段覆盖、答案长度；训练数据无 choose 选项属正常情况 |
 | BC8 answer-only 子集 | 统一输入题目 | 最终 JSON | 保持 B8 的格式稳定性 |
-| BC8 short-evidence 子集 | 统一输入题目 | `structured evidence + draft_answer` | 学习词义、句译骨架和情感短证据 |
-| BC8 teacher-critique 子集 | 统一输入题目 + 候选错误答案 | `structured critique + correction_evidence + corrected_answer` | 学习识别相近情感选项、词义误解、缺项和过长答案 |
+| BC8 short-evidence 子集 | 统一输入题目 | `structured evidence + sentiment + draft_answer` | 学习词义、句译骨架和情感分析（sentiment 使用受控词汇表） |
+| BC8 teacher-critique 子集 | 统一输入题目 + 候选错误答案 | `structured critique + correction_evidence + corrected_answer` | 学习识别 sentiment 分析错误（primary 标签偏差、rationale 不符诗歌）、词义误解、缺项和过长答案 |
 | BC8-final replay | 统一输入题目 | 最终 JSON | 降低混合蒸馏后的 JSON 错误率和输出漂移 |
 
-最终提交仍只使用 `docs/data-schema.md` 的最终 JSON。`structured evidence`、`draft_answer`、`critique` 和 `correction_evidence` 只用于训练和 harness 中间态，不进入最终提交。
+最终提交仍只使用 `docs/contracts/data-schema.md` 的最终 JSON。`structured evidence`、`draft_answer`、`critique` 和 `correction_evidence` 只用于训练和 harness 中间态，不进入最终提交。
 
 ## 2. B8 answer-only QLoRA 配置
 
@@ -42,8 +42,9 @@ B8 的目标是把最佳 8B 级 reasoner 适配到 CCL25 的最终输出格式�
 - 数据来源：高置信 answer-only 样本，标签为最终 JSON。
 - 输入：`idx/title/author/content/qa_words/qa_sents/choose` 的统一输入 JSON。
 - 输出：只包含 `idx/ans_qa_words/ans_qa_sents/choose_id` 的最终 JSON。
+- 训练数据来源（train-data/ 的 164 首诗）没有 `choose` 选项，因此这些样本的 `choose_id` 标签为 `""`。这属于正常情况，模型在此部分只学习词义和句译输出格式，不学习情感选项选择。
 - 不混入 `short_evidence`、`teacher_critique`、自由 CoT 或 Markdown。
-- 样本过滤复用 `docs/data-schema.md` 与 `docs/teacher-data.md` 的覆盖、选项合法性和长度规则。
+- 样本过滤复用 `docs/contracts/data-schema.md` 与 `docs/contracts/teacher-data.md` 的覆盖、选项合法性和长度规则。
 
 ### 2.2 推荐 QLoRA 超参
 
@@ -99,7 +100,7 @@ teacher-critique：10%
 | 有效 batch | 64-128 | 保持与 B8 接近 |
 | 序列长度 | 2048 起步，必要时 4096 | `teacher_critique` 更长，需监控截断 |
 | loss 权重 | 默认等权 | 若 critique 过长，可降低 critique loss 权重到 `0.5x` |
-| 早停依据 | 总分、JSON 错误率、情感分 | 任一关键格式指标明显回退即停止或 replay |
+| 早停依据 | 总分、JSON 错误率、sentiment 标签受控词汇表合规率、sentiment primary 一致性 | 任一关键格式或情感指标明显回退即停止或 replay |
 
 ### 3.3 输出格式约束
 
@@ -112,13 +113,19 @@ BC8 不是自由 CoT 训练。允许的非最终 JSON 输出只限结构化短�
     "sentences": {},
     "emotion": []
   },
+  "sentiment": {
+    "primary": "",
+    "secondary": [],
+    "rationale": ""
+  },
   "draft_answer": {
     "ans_qa_words": {},
-    "ans_qa_sents": {},
-    "choose_id": "D"
+    "ans_qa_sents": {}
   }
 }
 ```
+
+`sentiment` 字段使用第 3.2 节的受控词汇表，`primary` 为必须标签，`secondary` 为可选的次要标签列表，`rationale` 不超过 80 字。`draft_answer` **不包含** `choose_id`（由 Stage2 Formatter 根据 sentiment 映射到最终 choose_id）。
 
 `teacher_critique` 训练目标使用：
 
@@ -127,7 +134,11 @@ BC8 不是自由 CoT 训练。允许的非最终 JSON 输出只限结构化短�
   "critique": {
     "word_errors": [],
     "sentence_errors": [],
-    "emotion_error": {}
+    "emotion_error": {
+      "issue": "sentiment 标签偏差",
+      "expected_primary": "惜别感伤",
+      "rationale_mismatch": "尾联'风尘何处期'表达漂泊无定，primary 应为'羁旅漂泊'而非仅在 secondary 中出现"
+    }
   },
   "correction_evidence": {
     "words": {},
@@ -143,7 +154,7 @@ BC8 不是自由 CoT 训练。允许的非最终 JSON 输出只限结构化短�
 }
 ```
 
-其中 `draft_answer` 与 `docs/harness.md` 的 reasoner 输出保持一致，不包含 `idx`，由外层样本或 harness 注入；`corrected_answer` 是可直接评测的最终答案，必须包含 `idx` 并符合最终答案 schema。
+其中 `evidence_draft` 与 `docs/contracts/data-schema.md`（第 3 节）的 Reasoner 中间输出保持一致，`draft_answer` 不包含 `idx`，由外层样本或 harness 注入；`corrected_answer` 是可直接评测的最终答案，必须包含 `idx` 并符合最终答案 schema（包括 `choose_id`）。`emotion_error` 现在针对 **sentiment 分析**（primary/secondary 标签是否匹配诗歌、rationale 是否合理），而非直接批评 `choose_id` 选择。
 
 ## 4. 数据比例调整条件
 
@@ -154,7 +165,8 @@ BC8 不是自由 CoT 训练。允许的非最终 JSON 输出只限结构化短�
 | JSON 解析错误率、缺项率、非法 `choose_id` 高于 B8 | 提高 answer-only 到 70%-80%，降低 short-evidence 和 critique |
 | 输出开始夹带 evidence、Markdown 或额外字段 | 提高 answer-only，并缩短 BC8 训练 epoch；必要时提前进入 replay |
 | 词义或句译分低，格式仍稳定 | 提高 short-evidence 到 35%-40%，answer-only 不低于 50% |
-| 情感选择弱，尤其相近选项混淆 | 提高 teacher-critique 到 15%-20%，优先采样情感错误 critique |
+| sentiment 分析不准确（primary 标签错误或 rationale 与诗歌不符） | 提高 teacher-critique 到 15%-20%，优先采样 sentiment 错误 critique |
+| sentiment 标签不使用受控词汇表 | 提高 teacher-critique，并检查训练数据标签质量和 system prompt 约束 |
 | critique 导致模型默认批改而不是答题 | critique 降回 5%-10%，并强化训练目标标识 |
 | 过拟合 teacher 表达，答案变长 | 提高 answer-only，过滤长答案样本，降低 short-evidence loss 或采样率 |
 
@@ -226,9 +238,9 @@ BC8-final-qwen3-8b-nf4-peft-nothink-replay-stage-final-lr2e5-r16-a32-seq2048__ck
 
 | 目标名 | 训练阶段 | 是否输出最终 JSON | 是否输出 `structured evidence + draft_answer` | 说明 |
 | --- | --- | --- | --- | --- |
-| `final_json` | B8、BC8 answer-only、BC8-final replay | 是 | 否 | 根对象必须是最终 JSON，无额外字段 |
-| `evidence_draft` | BC8 short-evidence | 否 | 是 | 根对象包含 `idx`、`evidence` 与 `draft_answer`；`draft_answer` 不含 `idx`，其余字段符合最终 JSON schema |
-| `critique_correction` | BC8 teacher-critique | 通过 `corrected_answer` 嵌套输出 | 否 | 根对象包含 `critique/correction_evidence/corrected_answer`，不输出自由 CoT |
+| `final_json` | B8、BC8 answer-only、BC8-final replay | 是 | 否 | 根对象必须是最终 JSON，无额外字段。来自训练数据源（无 choose 选项）的样本 `choose_id=""`，属正常情况 |
+| `evidence_draft` | BC8 short-evidence | 否 | 是 | 根对象包含 `idx`、`evidence`、`sentiment` 与 `draft_answer`；`draft_answer` 不含 `idx` 也不含 `choose_id`（由 Formatter 映射） |
+| `critique_correction` | BC8 teacher-critique | 通过 `corrected_answer` 嵌套输出 | 否 | 根对象包含 `critique/correction_evidence/corrected_answer`，不输出自由 CoT。`emotion_error` 针对 sentiment 分析准确性（primary/secondary 标签、rationale 质量），而非 `choose_id` 选择 |
 
 推理时如果需要直接提交，使用 `final_json` 目标或 replay 后的 `BC8-final`。如果使用 harness，reasoner 使用 `evidence_draft` 输出，由 formatter 或规则 postprocess 生成最终 JSON。
 
@@ -237,4 +249,4 @@ BC8-final-qwen3-8b-nf4-peft-nothink-replay-stage-final-lr2e5-r16-a32-seq2048__ck
 1. P8 baseline 与专项模型调研尚未确定最终 8B 级 reasoner；本文只规定选择后如何训练。
 2. 官方训练数据是否有可靠句级译文和正确情感选项仍需数据检查；不可靠字段不得直接进入 answer-only。
 3. 实际显存会影响 LoRA target modules、rank、序列长度和 batch；首轮应优先稳定复现实验，再扩 rank 或 seq length。
-4. `teacher_critique` 对最终分数的净收益需要通过 BC8 消融确认；若只增加格式漂移，应降低比例或只用于情感专项实验。
+4. `teacher_critique` 对 sentiment 分析准确率的净收益需要通过 BC8 消融确认；若只增加格式漂移，应降低比例或只用于 sentiment 专项实验。

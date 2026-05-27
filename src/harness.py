@@ -20,6 +20,33 @@ FormatterFn = Callable[[dict[str, Any]], Union[str, dict[str, Any]]]
 FINAL_FIELDS = {"idx", "ans_qa_words", "ans_qa_sents", "choose_id"}
 WORD_LIMIT = 40
 SENTENCE_LIMIT = 80
+CONTROLLED_SENTIMENT_LABELS = {
+    "惜别感伤",
+    "送别不舍",
+    "离别愁绪",
+    "思乡怀远",
+    "羁旅思归",
+    "故园之思",
+    "忧国伤时",
+    "报国壮志",
+    "兴亡之叹",
+    "山水闲适",
+    "田园之乐",
+    "隐逸情怀",
+    "怀古伤今",
+    "历史沧桑",
+    "昔盛今衰",
+    "相思闺怨",
+    "爱情甜蜜",
+    "相思之苦",
+    "人生无常",
+    "时光易逝",
+    "仕途失意",
+    "边塞征战",
+    "将士艰辛",
+    "厌战思归",
+    "其他",
+}
 
 
 def unique_preserve_order(items: list[Any] | None) -> list[Any]:
@@ -90,6 +117,7 @@ def should_skip_formatter(report: Report) -> bool:
         and not report.get("missing_words")
         and not report.get("missing_sentences")
         and not report.get("invalid_choose_id")
+        and not report.get("needs_choose_mapping")
         and not report.get("overlong_fields")
         and not report.get("suspected_conflicts")
     )
@@ -158,6 +186,8 @@ def fallback_final(
         final_sents[sent] = value if isinstance(value, str) else ""
 
     choose_id = _normalize_choose_id(draft.get("choose_id"), task.get("choose") or {})
+    if choose_id == "":
+        choose_id = map_sentiment_to_choice(task, reasoner_output or {})
     return {
         "idx": task.get("idx"),
         "ans_qa_words": final_words,
@@ -173,8 +203,14 @@ def decide_next_action(report: Report) -> str:
     missing_fields = set(report.get("missing_fields") or [])
     if "draft_answer" in missing_fields or "draft_answer.choose_id" in missing_fields:
         return "retry_reasoner"
+    if "sentiment.rationale" in missing_fields:
+        return "retry_reasoner"
+    if report.get("sentiment_primary_missing") or report.get("sentiment_not_in_vocab"):
+        return "retry_reasoner"
     if report.get("invalid_choose_id"):
         return "retry_reasoner"
+    if report.get("needs_choose_mapping"):
+        return "call_formatter"
     if should_skip_formatter(report):
         return "use_draft"
     if (
@@ -254,7 +290,10 @@ def _empty_report(valid_json: bool) -> Report:
         "missing_fields": [],
         "missing_words": [],
         "missing_sentences": [],
+        "sentiment_primary_missing": False,
+        "sentiment_not_in_vocab": [],
         "invalid_choose_id": False,
+        "needs_choose_mapping": False,
         "overlong_fields": [],
         "suspected_conflicts": [],
     }
@@ -265,12 +304,25 @@ def _validate_common_structure(
     output: dict[str, Any],
     report: Report,
 ) -> None:
-    for field in ("idx", "evidence", "draft_answer"):
+    for field in ("idx", "evidence", "sentiment", "draft_answer"):
         if field not in output:
             report["missing_fields"].append(field)
 
     if output.get("idx") != task.get("idx"):
         report["suspected_conflicts"].append("idx_mismatch")
+
+    sentiment = output.get("sentiment")
+    if not isinstance(sentiment, dict):
+        report["sentiment_primary_missing"] = True
+    else:
+        primary = str(sentiment.get("primary", "")).strip()
+        rationale = str(sentiment.get("rationale", "")).strip()
+        if not primary:
+            report["sentiment_primary_missing"] = True
+        elif primary not in CONTROLLED_SENTIMENT_LABELS:
+            report["sentiment_not_in_vocab"].append(primary)
+        if not rationale:
+            report["missing_fields"].append("sentiment.rationale")
 
     draft = output.get("draft_answer")
     if not isinstance(draft, dict):
@@ -289,7 +341,11 @@ def _validate_final_fields(
     if not prefix and "idx" not in answer:
         report["missing_fields"].append("idx")
 
-    for field in ("ans_qa_words", "ans_qa_sents", "choose_id"):
+    required_fields = ("ans_qa_words", "ans_qa_sents")
+    if not prefix:
+        required_fields = (*required_fields, "choose_id")
+
+    for field in required_fields:
         if field not in answer:
             report["missing_fields"].append(prefix + field)
 
@@ -320,9 +376,11 @@ def _validate_final_fields(
 
     choose = task.get("choose") or {}
     choose_id = _normalize_choose_id(answer.get("choose_id"), choose)
-    if choose and choose_id not in choose:
+    if prefix and choose and "choose_id" not in answer:
+        report["needs_choose_mapping"] = True
+    elif choose and choose_id not in choose:
         report["invalid_choose_id"] = True
-    if not choose and choose_id != "":
+    elif not choose and choose_id != "":
         report["invalid_choose_id"] = True
 
 
@@ -341,6 +399,54 @@ def _normalize_choose_id(value: Any, choose: dict[str, Any]) -> str:
         return text
     matches = [key for key in choose if key in text]
     return matches[0] if len(matches) == 1 else ""
+
+
+def map_sentiment_to_choice(task: dict[str, Any], reasoner_output: dict[str, Any]) -> str:
+    choose = task.get("choose") or {}
+    if not choose:
+        return ""
+
+    sentiment = reasoner_output.get("sentiment") if isinstance(reasoner_output, dict) else {}
+    if not isinstance(sentiment, dict):
+        return ""
+
+    primary = str(sentiment.get("primary", "")).strip()
+    secondary = [str(item).strip() for item in (sentiment.get("secondary") or []) if str(item).strip()]
+    rationale = str(sentiment.get("rationale", "")).strip()
+    keywords = _sentiment_keywords(primary, secondary, rationale)
+    if not keywords:
+        return ""
+
+    best_key = ""
+    best_score = 0
+    for choose_id, text in choose.items():
+        option_text = str(text)
+        score = sum(option_text.count(keyword) for keyword in keywords)
+        if score > best_score:
+            best_key = str(choose_id)
+            best_score = score
+    return best_key if best_score > 0 else ""
+
+
+def _sentiment_keywords(primary: str, secondary: list[str], rationale: str) -> list[str]:
+    keywords = []
+    for label in [primary, *secondary]:
+        label = label.replace("之", "")
+        if label:
+            keywords.append(label)
+        if len(label) >= 2:
+            keywords.extend(label[index : index + 2] for index in range(len(label) - 1))
+        keywords.extend(char for char in label if char.strip())
+    if rationale:
+        keywords.extend(token for token in re.findall(r"[\u4e00-\u9fff]{1,2}", rationale))
+
+    seen = set()
+    unique_keywords = []
+    for keyword in keywords:
+        if keyword and keyword not in seen:
+            seen.add(keyword)
+            unique_keywords.append(keyword)
+    return unique_keywords
 
 
 def _detect_evidence_choose_conflict(

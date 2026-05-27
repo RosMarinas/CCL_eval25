@@ -6,6 +6,7 @@ from src.harness import (
     build_formatter_prompt,
     decide_next_action,
     fallback_final,
+    map_sentiment_to_choice,
     parse_reasoner_output,
     run_harness_once,
     should_skip_formatter,
@@ -38,12 +39,23 @@ def reasoner_output(choose_id="Ｄ"):
             "sentences": {"故关衰草遍，离别自堪悲": "旧关衰草遍布，离别令人悲伤"},
             "emotion": ["衰草、离别、悲指向感伤"],
         },
+        "sentiment": {
+            "primary": "惜别感伤",
+            "secondary": ["羁旅思归"],
+            "rationale": "衰草、离别、悲指向送别伤感",
+        },
         "draft_answer": {
             "ans_qa_words": {"衰草": "枯黄的草，烘托荒凉离别"},
             "ans_qa_sents": {"故关衰草遍，离别自堪悲": "旧关长满枯草，分别本就令人悲伤"},
             "choose_id": choose_id,
         },
     }
+
+
+def reasoner_output_with_sentiment_no_choose_id():
+    output = reasoner_output()
+    output["draft_answer"].pop("choose_id")
+    return output
 
 
 class HarnessTest(unittest.TestCase):
@@ -105,6 +117,68 @@ class HarnessTest(unittest.TestCase):
         self.assertTrue(formatter_input["validator_report"]["invalid_choose_id"])
         self.assertIn("默认相信 reasoner 的 draft_answer，不要重新做题", prompt)
         self.assertIn('"validator_report"', prompt)
+
+
+    def test_reasoner_draft_without_choose_id_calls_formatter_for_choice_mapping(self):
+        task = sample_task()
+        output = reasoner_output_with_sentiment_no_choose_id()
+        report = validate_reasoner_output(task, output)
+
+        self.assertTrue(report["valid_json"])
+        self.assertNotIn("draft_answer.choose_id", report["missing_fields"])
+        self.assertFalse(report["invalid_choose_id"])
+        self.assertEqual(decide_next_action(report), "call_formatter")
+
+        def formatter_fn(formatter_input):
+            self.assertEqual(formatter_input["reasoner_output"]["sentiment"]["primary"], "惜别感伤")
+            return json.dumps(
+                {
+                    "idx": 7,
+                    "ans_qa_words": {"衰草": "枯黄的草，烘托荒凉离别"},
+                    "ans_qa_sents": {"故关衰草遍，离别自堪悲": "旧关长满枯草，分别本就令人悲伤"},
+                    "choose_id": "D",
+                },
+                ensure_ascii=False,
+            )
+
+        result = run_harness_once(task, json.dumps(output, ensure_ascii=False), formatter_fn=formatter_fn)
+
+        self.assertTrue(result["formatter_called"])
+        self.assertFalse(result["fallback_used"])
+        self.assertEqual(result["final_answer"]["choose_id"], "D")
+
+    def test_reasoner_without_sentiment_primary_retries_reasoner(self):
+        task = sample_task()
+        output = reasoner_output_with_sentiment_no_choose_id()
+        output["sentiment"] = {"primary": "", "secondary": [], "rationale": ""}
+
+        report = validate_reasoner_output(task, output)
+
+        self.assertTrue(report["sentiment_primary_missing"])
+        self.assertEqual(decide_next_action(report), "retry_reasoner")
+
+    def test_sentiment_mapping_fallback_uses_primary_label_overlap(self):
+        task = sample_task()
+        output = reasoner_output_with_sentiment_no_choose_id()
+
+        self.assertEqual(map_sentiment_to_choice(task, output), "D")
+
+        def formatter_fn(_formatter_input):
+            return json.dumps(
+                {
+                    "idx": 7,
+                    "ans_qa_words": {"衰草": "枯黄的草，烘托荒凉离别"},
+                    "ans_qa_sents": {"故关衰草遍，离别自堪悲": "旧关长满枯草，分别本就令人悲伤"},
+                    "choose_id": "Z",
+                },
+                ensure_ascii=False,
+            )
+
+        result = run_harness_once(task, json.dumps(output, ensure_ascii=False), formatter_fn=formatter_fn)
+
+        self.assertTrue(result["formatter_called"])
+        self.assertTrue(result["fallback_used"])
+        self.assertEqual(result["final_answer"]["choose_id"], "D")
 
 
     def test_run_harness_calls_formatter_and_validates_final_output(self):
