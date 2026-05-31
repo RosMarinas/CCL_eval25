@@ -27,7 +27,7 @@ from src.eval import (
     parse_json_object,
 )
 from src.inference import load_model
-from src.training_utils import render_prompt_text
+from src.training import render_prompt_text
 
 logger = logging.getLogger(__name__)
 
