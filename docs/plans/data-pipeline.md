@@ -33,7 +33,7 @@
   │                       ├── B8 answer-only (词义 + 句译, 无情感)
   │                       ├── BC8 short-evidence (60% answer-only)
   │                       ├── BC8 short-evidence (30% evidence+draft+sentiment)
-  │                       └── BC8 teacher-critique (10% critique)
+  │                       └── BC8 teacher-critique (25% critique)
   │
   └── data/eval_data.json (327首)
         ├── Dev split (~50首) → Teacher 生成 → 训练用（含 choose_id）
@@ -160,7 +160,7 @@ python3 remote_run.py python src/cli/build_training_data.py \
 ```
 60% answer-only（同 B8）
 30% short-evidence（teacher 生成的 evidence + sentiment + draft_answer）
-10% teacher-critique（teacher 生成的 critique + correction）
+25% teacher-critique（teacher 生成的 critique + correction）
 ```
 
 构造脚本：
@@ -168,7 +168,7 @@ python3 remote_run.py python src/cli/build_training_data.py \
 ```bash
 python3 remote_run.py python src/cli/build_training_data.py \
   --type bc8-mixed \
-  --ratio 60-30-10 \
+  --ratio 50-25-25 \
   --answer-only data/training/b8-answer-only.jsonl \
   --short-evidence data/teacher/train-short-evidence.jsonl \
   --teacher-critique data/teacher/train-critique.jsonl \

@@ -41,7 +41,7 @@ from openai import OpenAI
 # Constants
 # ============================================================
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 CONTROLLED_VOCABULARY = [
     # 离别
@@ -85,11 +85,12 @@ SENTENCE_DELIMITERS = "。！？!?"
 MAX_RETRIES = 5
 INITIAL_BACKOFF = 1.0
 
-DEFAULT_TEMPERATURE = 0.3
-DEGRADE_TEMPERATURE = 0.5
 MAX_TOKENS = 4096
+THINKING_MODE = {"type": "enabled"}
+DEFAULT_REASONING_EFFORT = "high"
+DEGRADE_REASONING_EFFORT = "max"
 
-DEGRADE_THRESHOLD = 3  # consecutive parse failures before degrading temperature
+DEGRADE_THRESHOLD = 3  # consecutive parse failures before increasing reasoning effort
 DEGRADE_RETRY_FAILURE = "parse_failed"
 
 # ============================================================
@@ -118,7 +119,7 @@ def parse_args() -> argparse.Namespace:
         "--type",
         type=str,
         default="short-evidence",
-        choices=["short-evidence"],
+        choices=["short-evidence", "teacher-critique"],
         help="Record type to generate (default: short-evidence)",
     )
     parser.add_argument(
@@ -199,24 +200,31 @@ def load_api_key(api_key_path: str) -> str:
 # ============================================================
 
 
-def load_tasks(input_path: str) -> list[dict[str, Any]]:
-    """Load tasks from a directory or a single JSON file.
+def load_tasks(input_path: str, record_type: str = "short-evidence") -> list[dict[str, Any]]:
+    """Load tasks (and optionally candidate answers) from input.
 
-    Directory input (e.g. train-data/):
-        - Walks *.json files recursively (sorted by path)
-        - Assumes each file is a JSON array of training samples
-        - Each training sample has: title, content, keywords (object), trans, emotion
-        - Constructs unified schema with sequential idx, qa_words from keywords keys,
-          qa_sents from content sentence-splitting, choose = {}
+    For short-evidence:
+        Directory input (e.g. train-data/):
+            - Walks *.json files recursively (sorted by path)
+            - Assumes each file is a JSON array of training samples
+            - Each training sample has: title, content, keywords (object), trans, emotion
+            - Constructs unified schema with sequential idx, qa_words from keywords keys,
+              qa_sents from content sentence-splitting, choose = {}
+        File input (e.g. eval-dev-50.json):
+            - Assumes unified schema already present: idx, title, author, content,
+              qa_words, qa_sents, choose
 
-    File input (e.g. eval-dev-50.json):
-        - Assumes unified schema already present: idx, title, author, content,
-          qa_words, qa_sents, choose
+    For teacher-critique:
+        Input must be a JSONL file where each line has:
+            {"task": {...}, "candidate": {...}}
+        Returns list of dicts with "task" and "candidate" keys.
     """
     path = _resolve_path(input_path)
     if not path.exists():
         print(f"[FATAL] Input path not found: {path}", file=sys.stderr)
         sys.exit(1)
+    if record_type == "teacher-critique":
+        return _load_tasks_from_jsonl(path)
     if path.is_dir():
         return _load_tasks_from_dir(path)
     return _load_tasks_from_file(path)
@@ -291,6 +299,48 @@ def _load_tasks_from_file(path: Path) -> list[dict[str, Any]]:
 
     print(f"  Loaded {len(data)} eval tasks from {path}")
     return data
+
+
+def _load_tasks_from_jsonl(path: Path) -> list[dict[str, Any]]:
+    """Load task-candidate pairs from a JSONL file for teacher-critique.
+
+    Each line should be a JSON object with keys:
+        task: unified task dict
+        candidate: candidate answer dict (perturbed/incorrect answer)
+    """
+    items: list[dict[str, Any]] = []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line_num, line in enumerate(f, 1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError as e:
+                    print(f"[WARN] Line {line_num}: JSON decode error: {e}", file=sys.stderr)
+                    continue
+                if not isinstance(obj, dict):
+                    print(f"[WARN] Line {line_num}: Expected JSON object, got {type(obj).__name__}", file=sys.stderr)
+                    continue
+                task = obj.get("task")
+                candidate = obj.get("candidate")
+                if not isinstance(task, dict) or not isinstance(candidate, dict):
+                    print(f"[WARN] Line {line_num}: Missing 'task' or 'candidate' key", file=sys.stderr)
+                    continue
+                if "idx" not in task:
+                    print(f"[WARN] Line {line_num}: Task missing 'idx' field", file=sys.stderr)
+                items.append({"task": task, "candidate": candidate})
+    except OSError as e:
+        print(f"[FATAL] Cannot read input file {path}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if not items:
+        print(f"[FATAL] No valid task-candidate pairs found in {path}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"  Loaded {len(items)} task-candidate pairs from {path}")
+    return items
 
 
 def _split_sentences(content: str) -> list[str]:
@@ -403,6 +453,90 @@ def build_prompt(task: dict[str, Any]) -> str:
     return prompt
 
 
+def build_teacher_critique_prompt(task: dict[str, Any], candidate_answer: dict[str, Any]) -> str:
+    """Build the teacher prompt for teacher-critique generation.
+
+    Uses the exact prompt template from docs/contracts/teacher-data.md Section 2.2.
+    Generates structured critique and corrected answer for a candidate answer.
+    """
+    task_json = json.dumps(task, ensure_ascii=False, indent=2)
+    candidate_json = json.dumps(candidate_answer, ensure_ascii=False, indent=2)
+
+    vocab_str = "、".join(CONTROLLED_VOCABULARY)
+
+    prompt = (
+        "你是古诗词理解任务的教师模型。请根据输入题目和一个候选错误答案，生成结构化批改意见与修正答案。\n"
+        "\n"
+        "硬性要求：\n"
+        "1. 只输出一个合法 JSON 对象，不输出 Markdown、解释文字或代码块。\n"
+        "2. 不要输出自由长 CoT，不要写逐步推理过程。\n"
+        "3. critique 只能指出可验证的错误类型和短理由；每条 comment 不超过 50 个中文字符。\n"
+        "4. corrected_answer 必须使用最终答案 schema。\n"
+        "5. 不要改写正确且足够简洁的字段。\n"
+        '6. 如果无法判断某字段是否错误，将 error_type 写为 "uncertain"，并在 quality_flags 中加入 "needs_human_review"。\n'
+        "7. emotion_error 评价候选答案中 sentiment 分析的准确性，而非 choose_id 的正误。\n"
+        "8. sentiment.primary 和 sentiment.secondary 中的每个标签必须来自受控词汇表"
+        f"（{vocab_str}）。\n"
+        "\n"
+        f"输入题目：\n{task_json}\n"
+        "\n"
+        f"候选答案：\n{candidate_json}\n"
+        "\n"
+        "请输出：\n"
+        "{\n"
+        '  "record_type": "teacher_critique",\n'
+        f'  "idx": {task["idx"]},\n'
+        f'  "candidate_answer": {candidate_json},\n'
+        '  "critique": {\n'
+        '    "word_errors": [\n'
+        "      {\n"
+        '        "target": "<target_word>",\n'
+        '        "error_type": "<missing|wrong_meaning|overlong|unsupported|correct|uncertain>",\n'
+        '        "comment": "<短批注意见>"\n'
+        "      }\n"
+        "    ],\n"
+        '    "sentence_errors": [\n'
+        "      {\n"
+        '        "target": "<target_sentence>",\n'
+        '        "error_type": "<missing|wrong_translation|overlong|unsupported|correct|uncertain>",\n'
+        '        "comment": "<短批注意见>"\n'
+        "      }\n"
+        "    ],\n"
+        '    "emotion_error": {\n'
+        '      "candidate_primary": "<候选答案中的 sentiment.primary>",\n'
+        '      "correct_primary": "<正确的 sentiment.primary 标签>",\n'
+        '      "candidate_secondary": ["<候选答案中的 sentiment.secondary 标签列表>"],\n'
+        '      "correct_secondary": ["<正确的 sentiment.secondary 标签列表>"],\n'
+        '      "primary_error_type": "<wrong_label|not_in_vocab|missing|correct|uncertain>",\n'
+        '      "secondary_error_type": "<extra_label|missing_label|wrong_label|correct|uncertain>",\n'
+        '      "rationale_error_type": "<no_evidence|contradicts_vocab|correct|uncertain>",\n'
+        '      "comment": "<短批注意见>"\n'
+        "    }\n"
+        "  },\n"
+        '  "correction_evidence": {\n'
+        '    "words": {},\n'
+        '    "sentences": {},\n'
+        '    "emotion": [\n'
+        '      "<情感判断依据1>",\n'
+        '      "<情感判断依据2>"\n'
+        "    ]\n"
+        "  },\n"
+        '  "corrected_sentiment": {\n'
+        '    "primary": "<正确的 sentiment.primary 标签>",\n'
+        '    "secondary": ["<正确的 sentiment.secondary 标签列表>"],\n'
+        '    "rationale": "<正确的情感判断依据>"\n'
+        "  },\n"
+        '  "corrected_answer": {\n'
+        f'    "idx": {task["idx"]},\n'
+        '    "ans_qa_words": {},\n'
+        '    "ans_qa_sents": {}\n'
+        "  },\n"
+        '  "quality_flags": []\n'
+        "}"
+    )
+    return prompt
+
+
 # ============================================================
 # API call
 # ============================================================
@@ -412,7 +546,7 @@ def call_teacher(
     prompt: str,
     model_name: str,
     api_key: str,
-    temperature: float = DEFAULT_TEMPERATURE,
+    reasoning_effort: str = DEFAULT_REASONING_EFFORT,
 ) -> str | None:
     """Call the DeepSeek chat completion API and return the response text.
 
@@ -424,7 +558,7 @@ def call_teacher(
     """
     client = OpenAI(
         api_key=api_key,
-        base_url="https://api.deepseek.com/v1",
+        base_url="https://api.deepseek.com",
     )
 
     for attempt in range(MAX_RETRIES + 1):
@@ -432,8 +566,9 @@ def call_teacher(
             response = client.chat.completions.create(
                 model=model_name,
                 messages=[{"role": "user", "content": prompt}],
-                temperature=temperature,
                 max_tokens=MAX_TOKENS,
+                reasoning_effort=reasoning_effort,
+                extra_body={"thinking": THINKING_MODE},
             )
             content = response.choices[0].message.content
             return content
@@ -614,19 +749,74 @@ def build_output_record(
     return record
 
 
+def build_teacher_critique_output_record(
+    task: dict[str, Any],
+    parsed: dict[str, Any],
+    model_name: str,
+    candidate_answer: dict[str, Any],
+    prompt_version: str = "teacher-critique-v2",
+) -> dict[str, Any]:
+    """Build the complete output record for teacher-critique with source and task metadata.
+
+    Wraps the model's parsed JSON with additional fields (source, task).
+    Follows the Section 4 schema from docs/contracts/teacher-data.md.
+    Uses the input candidate_answer directly (not the model's reproduced version).
+    """
+    critique = parsed.get("critique")
+    if not isinstance(critique, dict):
+        critique = {}
+
+    correction_evidence = parsed.get("correction_evidence")
+    if not isinstance(correction_evidence, dict):
+        correction_evidence = {}
+
+    corrected_sentiment = parsed.get("corrected_sentiment")
+    if not isinstance(corrected_sentiment, dict):
+        corrected_sentiment = {}
+
+    corrected_answer = parsed.get("corrected_answer")
+    if not isinstance(corrected_answer, dict):
+        corrected_answer = {}
+
+    quality_flags = parsed.get("quality_flags")
+    if not isinstance(quality_flags, list):
+        quality_flags = []
+
+    record: dict[str, Any] = {
+        "record_type": "teacher_critique",
+        "idx": task["idx"],
+        "source": {
+            "teacher_model": model_name,
+            "prompt_version": prompt_version,
+            "created_at": date.today().strftime("%Y-%m-%d"),
+            "candidate_source": "synthetic",
+        },
+        "task": task,
+        "candidate_answer": candidate_answer,
+        "critique": critique,
+        "correction_evidence": correction_evidence,
+        "corrected_sentiment": corrected_sentiment,
+        "corrected_answer": corrected_answer,
+        "quality_flags": quality_flags,
+    }
+
+    return record
+
+
 def build_error_record(
     task: dict[str, Any],
     model_name: str,
     error_type: str,
     error_detail: str = "",
+    record_type_str: str = "short_evidence",
 ) -> dict[str, Any]:
     """Build a placeholder record for failed generations.
 
-    These records have record_type suffixed with '_parse_failed' or similar
+    These records have record_type suffixed with '_<error_type>'
     to distinguish them from successful generations.
     """
     return {
-        "record_type": "short_evidence_parse_failed",
+        "record_type": f"{record_type_str}_{error_type}",
         "idx": task["idx"],
         "source": {
             "teacher_model": model_name,
@@ -644,43 +834,67 @@ def build_error_record(
 # ============================================================
 
 
+def _get_item_idx(item: dict[str, Any], record_type: str) -> int:
+    """Extract the integer idx from a task item, regardless of record type."""
+    if record_type == "teacher-critique":
+        return item["task"]["idx"]
+    return item["idx"]
+
+
 def process_sample(
-    task: dict[str, Any],
+    item: dict[str, Any],
     model_name: str,
     api_key: str,
     state: list[int],
+    record_type: str = "short-evidence",
 ) -> dict[str, Any]:
     """Process a single sample: build prompt, call API, parse JSON response.
 
     Args:
-        task: Unified task dict.
+        item: Unified task dict (short-evidence) or {"task": ..., "candidate": ...} (teacher-critique).
         model_name: API model name.
         api_key: API key string.
         state: Mutable list with one element [consecutive_failures].
                Shared across threads for degradation logic.
+        record_type: "short-evidence" or "teacher-critique".
 
     Returns:
         Output record (success or error).
     """
-    prompt = build_prompt(task)
+    record_type_underscore = record_type.replace("-", "_")
 
-    # Degradation: if 3+ consecutive parse failures, try with higher temperature
+    if record_type == "teacher-critique":
+        task = item["task"]
+        candidate_answer = item["candidate"]
+        prompt = build_teacher_critique_prompt(task, candidate_answer)
+        required_fields = ["critique", "correction_evidence", "corrected_sentiment", "corrected_answer"]
+    else:
+        task = item
+        candidate_answer = None
+        prompt = build_prompt(task)
+        required_fields = ["evidence", "sentiment", "draft_answer"]
+
+    # Degradation: thinking mode ignores temperature, so raise reasoning effort instead.
     consecutive_failures = state[0]
-    temperature = DEGRADE_TEMPERATURE if consecutive_failures >= DEGRADE_THRESHOLD else DEFAULT_TEMPERATURE
+    reasoning_effort = (
+        DEGRADE_REASONING_EFFORT
+        if consecutive_failures >= DEGRADE_THRESHOLD
+        else DEFAULT_REASONING_EFFORT
+    )
 
-    if temperature != DEFAULT_TEMPERATURE:
+    if reasoning_effort != DEFAULT_REASONING_EFFORT:
         print(
-            f"  idx={task['idx']}: degraded temperature={temperature} "
+            f"  idx={_get_item_idx(item, record_type)}: degraded reasoning_effort={reasoning_effort} "
             f"({consecutive_failures} consecutive failures)",
             file=sys.stderr,
         )
 
-    text = call_teacher(prompt, model_name, api_key, temperature=temperature)
+    text = call_teacher(prompt, model_name, api_key, reasoning_effort=reasoning_effort)
 
     if text is None:
         # API call failed after retries
         state[0] += 1
-        return build_error_record(task, model_name, "api_error", "API call failed after retries")
+        return build_error_record(task, model_name, "api_error", "API call failed after retries", record_type_str=record_type_underscore)
 
     parsed = extract_json(text)
 
@@ -692,11 +906,11 @@ def process_sample(
             model_name,
             "parse_failed",
             f"Could not parse JSON from response (length={len(text)})",
+            record_type_str=record_type_underscore,
         )
 
     # Validate required fields
-    required = ["evidence", "sentiment", "draft_answer"]
-    missing = [f for f in required if f not in parsed or not isinstance(parsed[f], dict)]
+    missing = [f for f in required_fields if f not in parsed or not isinstance(parsed[f], dict)]
     if missing:
         state[0] += 1
         return build_error_record(
@@ -704,11 +918,14 @@ def process_sample(
             model_name,
             "missing_fields",
             f"Missing required fields: {', '.join(missing)}",
+            record_type_str=record_type_underscore,
         )
 
     # Success: reset consecutive failure counter
     state[0] = 0
 
+    if record_type == "teacher-critique":
+        return build_teacher_critique_output_record(task, parsed, model_name, candidate_answer)
     return build_output_record(task, parsed, model_name)
 
 
@@ -718,14 +935,15 @@ def process_sample(
 
 
 def process_batch(
-    tasks: list[dict[str, Any]],
+    items: list[dict[str, Any]],
     model_name: str,
     api_key: str,
     rate_limit: int,
+    record_type: str = "short-evidence",
 ) -> list[dict[str, Any]]:
-    """Process a batch of tasks concurrently with rate-limited parallelism.
+    """Process a batch of items concurrently with rate-limited parallelism.
 
-    Each task is submitted to a thread pool (max_workers=rate_limit).
+    Each item is submitted to a thread pool (max_workers=rate_limit).
     Results are collected and sorted by idx for a deterministic output order.
     """
     records: list[dict[str, Any]] = []
@@ -733,18 +951,21 @@ def process_batch(
     # Using a list so threads can read/write the counter.
     state = [0]
 
+    success_record_types = ("short_evidence", "teacher_critique")
+    record_type_underscore = record_type.replace("-", "_")
+
     with ThreadPoolExecutor(max_workers=rate_limit) as executor:
         future_to_idx = {
-            executor.submit(process_sample, task, model_name, api_key, state): task["idx"]
-            for task in tasks
+            executor.submit(process_sample, item, model_name, api_key, state, record_type): _get_item_idx(item, record_type)
+            for item in items
         }
         for future in as_completed(future_to_idx):
             idx = future_to_idx[future]
             try:
                 record = future.result()
                 records.append(record)
-                record_type = record.get("record_type", "")
-                if record_type == "short_evidence":
+                rec_type = record.get("record_type", "")
+                if rec_type in success_record_types:
                     print(f"  idx={idx}: OK")
                 else:
                     error_type = record.get("error_type", "?")
@@ -758,6 +979,7 @@ def process_batch(
                         model_name,
                         "unexpected_error",
                         str(exc),
+                        record_type_str=record_type_underscore,
                     )
                 )
 
@@ -818,7 +1040,7 @@ def append_records(output_path: Path, records: list[dict[str, Any]]) -> None:
 def print_statistics(all_records: list[dict[str, Any]]) -> None:
     """Print summary statistics after all batches complete."""
     total = len(all_records)
-    success = sum(1 for r in all_records if r.get("record_type") == "short_evidence")
+    success = sum(1 for r in all_records if r.get("record_type") in ("short_evidence", "teacher_critique"))
     failed_api = sum(1 for r in all_records if r.get("error_type") == "api_error")
     failed_parse = sum(1 for r in all_records if r.get("error_type") == "parse_failed")
     failed_missing = sum(1 for r in all_records if r.get("error_type") == "missing_fields")
@@ -848,7 +1070,7 @@ def main() -> int:
 
     1. Parse CLI arguments
     2. Load API key
-    3. Load tasks from input (directory or file)
+    3. Load tasks from input (directory, file, or JSONL)
     4. Resume: skip already-processed idx from output file
     5. Process pending tasks in batches
     6. Write results incrementally
@@ -867,7 +1089,7 @@ def main() -> int:
 
     # ---- Load tasks ----
     print(f"[INFO] Loading tasks from: {args.input}")
-    all_tasks = load_tasks(args.input)
+    all_tasks = load_tasks(args.input, args.type)
     print(f"[INFO] Total tasks loaded: {len(all_tasks)}")
 
     if not all_tasks:
@@ -879,7 +1101,8 @@ def main() -> int:
     if completed_idx:
         print(f"[INFO] Found {len(completed_idx)} already completed idx in output file")
 
-    pending = [t for t in all_tasks if t["idx"] not in completed_idx]
+    success_record_types = ("short_evidence", "teacher_critique")
+    pending = [t for t in all_tasks if _get_item_idx(t, args.type) not in completed_idx]
     if not pending:
         print("[INFO] All tasks already completed. Nothing to do.")
         return 0
@@ -896,15 +1119,15 @@ def main() -> int:
     for batch_start in range(0, total_pending, args.batch_size):
         batch = pending[batch_start : batch_start + args.batch_size]
         batch_end_idx = min(batch_start + args.batch_size, total_pending)
-        first_idx = batch[0]["idx"]
-        last_idx = batch[-1]["idx"]
+        first_idx = _get_item_idx(batch[0], args.type)
+        last_idx = _get_item_idx(batch[-1], args.type)
 
         print(
             f"\n[Batch] idx range [{first_idx}..{last_idx}] "
             f"({batch_start + 1}-{batch_end_idx} of {total_pending})"
         )
 
-        records = process_batch(batch, args.model, api_key, args.rate_limit)
+        records = process_batch(batch, args.model, api_key, args.rate_limit, args.type)
 
         # Write immediately for resume/crash safety
         append_records(output_path, records)
@@ -918,7 +1141,7 @@ def main() -> int:
     print_statistics(all_records)
 
     has_failures = any(
-        r.get("record_type") != "short_evidence" for r in all_records
+        r.get("record_type") not in success_record_types for r in all_records
     )
     return 1 if has_failures else 0
 

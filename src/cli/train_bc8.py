@@ -50,7 +50,7 @@ from transformers import (
 
 logger = logging.getLogger(__name__)
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 # ---------------------------------------------------------------------------
 # Prompt templates (one per target type)
@@ -353,15 +353,12 @@ def format_bc8_sample(
 ) -> str:
     """Format one BC8 training sample as a full chat conversation string.
 
-    Uses the target-specific prompt template and output format.
+    Uses plain text (no chat template) so training matches eval format.
     """
     prompt = render_prompt_for_target(task, target, candidate=candidate_json)
     response = json.dumps(output_json, ensure_ascii=False)
-    messages = [
-        {"role": "user", "content": prompt},
-        {"role": "assistant", "content": response},
-    ]
-    return tokenizer.apply_chat_template(messages, tokenize=False)
+    eos = tokenizer.eos_token or ""
+    return prompt + response + eos
 
 
 def format_user_prompt(
@@ -370,15 +367,8 @@ def format_user_prompt(
     target: str = "final_json",
     candidate_json: dict[str, Any] | None = None,
 ) -> str:
-    """Format only the user turn with the generation-prompt suffix.
-
-    Used for evaluation (the model generates the assistant part).
-    """
-    prompt = render_prompt_for_target(task, target, candidate=candidate_json)
-    messages = [{"role": "user", "content": prompt}]
-    return tokenizer.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=True
-    )
+    """Return the plain-text prompt (no chat template), matching eval format."""
+    return render_prompt_for_target(task, target, candidate=candidate_json)
 
 
 # ---------------------------------------------------------------------------
@@ -775,7 +765,7 @@ def evaluate(
     model: AutoModelForCausalLM,
     tokenizer: AutoTokenizer,
     dev_tasks: list[dict[str, Any]],
-    max_new_tokens: int = 512,
+    max_new_tokens: int = 1024,
 ) -> dict[str, float | int]:
     """Run the model on dev tasks and compute JSON error rate."""
     model.eval()
@@ -825,13 +815,13 @@ def evaluate(
 
 
 # ---------------------------------------------------------------------------
-# Training ratio (60/30/10)
+# Training ratio (50/25/25)
 # ---------------------------------------------------------------------------
 
 TARGET_RATIO: dict[str, float] = {
-    "final_json": 0.6,
-    "evidence_draft": 0.3,
-    "critique_correction": 0.1,
+    "final_json": 0.5,
+    "evidence_draft": 0.25,
+    "critique_correction": 0.25,
 }
 
 
@@ -1104,8 +1094,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--eval-max-new-tokens",
         type=int,
-        default=512,
-        help="Max generated tokens for dev eval (default: 512)",
+        default=1024,
+        help="Max generated tokens for dev eval (default: 1024)",
     )
 
     args = parser.parse_args(argv)

@@ -18,8 +18,8 @@ Usage:
         --dev-data data/splits/eval50.json \
         --output-dir checkpoints/BC8-final \
         --lr 2e-5 \
-        --epochs 0.5 \
-        --batch-size 4 --grad-accum 16 \
+        --epochs 3.0 \
+        --batch-size 4 --grad-accum 4 \
         --seq-length 2048
 """
 
@@ -51,7 +51,37 @@ from src.cli.train_b8 import (
 
 logger = logging.getLogger(__name__)
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _normalize_record(rec: dict[str, Any]) -> dict[str, Any]:
+    """Extract answer fields from bc8-mixed format records.
+
+    bc8-mixed records nest answer data inside draft_answer (short_evidence)
+    or corrected_answer (teacher_critique).  This pulls them to the top level
+    so build_training_pairs can consume them.
+    """
+    if "ans_qa_words" in rec and "ans_qa_sents" in rec:
+        return rec  # Already answer-only format
+    # Try draft_answer (short_evidence records)
+    draft = rec.get("draft_answer")
+    if isinstance(draft, dict) and "ans_qa_words" in draft:
+        return {
+            **rec,
+            "ans_qa_words": draft["ans_qa_words"],
+            "ans_qa_sents": draft.get("ans_qa_sents", {}),
+            "choose_id": rec.get("choose_id", ""),
+        }
+    # Try corrected_answer (teacher_critique records)
+    corrected = rec.get("corrected_answer")
+    if isinstance(corrected, dict) and "ans_qa_words" in corrected:
+        return {
+            **rec,
+            "ans_qa_words": corrected["ans_qa_words"],
+            "ans_qa_sents": corrected.get("ans_qa_sents", {}),
+            "choose_id": rec.get("choose_id", ""),
+        }
+    return rec
 
 
 def train_replay(args: argparse.Namespace) -> int:
@@ -63,11 +93,22 @@ def train_replay(args: argparse.Namespace) -> int:
     logger.info("Step 1/6: Loading answer-only data and source index ...")
     answer_records = load_answer_only(args.train_data)
     source_index = load_train_source(args.train_source)
+
+    # Optionally mix in extra data to dilute empty-choose_id samples
+    extra_pairs_count = 0
+    if args.extra_data:
+        for extra_path in args.extra_data:
+            extra_records = load_answer_only(extra_path)
+            extra_records = [_normalize_record(r) for r in extra_records]
+            logger.info("  extra data: %s -> %d records", extra_path, len(extra_records))
+            answer_records.extend(extra_records)
+            extra_pairs_count += len(extra_records)
+
     pairs = build_training_pairs(answer_records, source_index)
     if not pairs:
         logger.error("No training pairs.  Aborting.")
         return 1
-    logger.info("  %d pairs ready", len(pairs))
+    logger.info("  %d pairs ready (%d from extra data)", len(pairs), extra_pairs_count)
 
     # ---- Step 2: Load base model with 4-bit quant, then attach BC8 adapter ----
     logger.info("Step 2/6: Loading base model + BC8 LoRA adapter ...")
@@ -188,6 +229,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Path to b8-answer-only.jsonl",
     )
     parser.add_argument(
+        "--extra-data",
+        default=None,
+        nargs="*",
+        help="Additional JSONL files (answer-only format) to mix into replay. "
+        "Use this to include short-evidence or teacher-critique samples so "
+        "the replay does not overfit to empty choose_id.",
+    )
+    parser.add_argument(
         "--train-source",
         default=None,
         help="Path to train-data/ directory (default: <project>/data/train-data)",
@@ -207,16 +256,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     # ---- Optimisation ----
     parser.add_argument("--lr", type=float, default=2e-5, help="Peak learning rate (default: 2e-5)")
-    parser.add_argument("--epochs", type=float, default=1.0, help="Training epochs (default: 1.0)")
+    parser.add_argument("--epochs", type=float, default=3.0, help="Training epochs (default: 3.0)")
     parser.add_argument("--batch-size", type=int, default=4, help="Per-device batch size (default: 4)")
     parser.add_argument(
-        "--grad-accum", type=int, default=16, help="Gradient accumulation steps (default: 16)"
+        "--grad-accum", type=int, default=4, help="Gradient accumulation steps (default: 4)"
     )
     parser.add_argument(
         "--seq-length", type=int, default=2048, help="Max sequence length (default: 2048)"
     )
     parser.add_argument(
-        "--warmup-ratio", type=float, default=0.0, help="Warmup ratio (default: 0.0 — no warmup for replay)"
+        "--warmup-ratio", type=float, default=0.03, help="Warmup ratio (default: 0.03)"
     )
     parser.add_argument("--weight-decay", type=float, default=0.0, help="Weight decay (default: 0.0)")
 
@@ -224,8 +273,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--eval-max-new-tokens",
         type=int,
-        default=512,
-        help="Max generated tokens for dev eval (default: 512)",
+        default=1024,
+        help="Max generated tokens for dev eval (default: 1024)",
     )
 
     args = parser.parse_args(argv)
@@ -238,6 +287,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args.train_data = str(Path(args.train_data).resolve())
     args.train_source = str(Path(args.train_source).resolve())
     args.checkpoint = str(Path(args.checkpoint).resolve())
+    if args.extra_data:
+        args.extra_data = [str(Path(p).resolve()) for p in args.extra_data]
     if args.dev_data:
         args.dev_data = str(Path(args.dev_data).resolve())
     args.output_dir = str(Path(args.output_dir).resolve())

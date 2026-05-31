@@ -150,7 +150,7 @@ def _make_formatter_fn(base_model: str) -> Callable[[dict[str, Any]], str]:
 
     def formatter_fn(formatter_input: dict[str, Any]) -> str:
         prompt = build_formatter_prompt(formatter_input)
-        output, _ = _generate_with_model(model, tokenizer, prompt, max_new_tokens=512)
+        output, _ = _generate_with_model(model, tokenizer, prompt, max_new_tokens=768)
         return output
 
     return formatter_fn

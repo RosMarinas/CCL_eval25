@@ -198,7 +198,7 @@ checkpoint 名称必须可追溯到模型、量化、训练阶段和关键参数
 
 ```text
 B8-qwen3-8b-nf4-peft-nothink-finaljson-stage-b8-lr1e4-r16-a32-seq2048__ckpt-1200__dev-json0.018__dev-total0.742
-BC8-qwen3-8b-nf4-peft-nothink-mix60-30-10-stage-bc8-lr5e5-r16-a32-seq2048__ckpt-1800__dev-json0.024__dev-total0.781
+BC8-qwen3-8b-nf4-peft-nothink-mix50-25-25-stage-bc8-lr5e5-r16-a32-seq2048__ckpt-1800__dev-json0.024__dev-total0.781
 BC8-final-qwen3-8b-nf4-peft-nothink-replay-stage-final-lr2e5-r16-a32-seq2048__ckpt-2100__dev-json0.010__dev-total0.776
 ```
 
@@ -220,7 +220,7 @@ BC8-final-qwen3-8b-nf4-peft-nothink-replay-stage-final-lr2e5-r16-a32-seq2048__ck
 | `quant` | `nf4` / `bf16` / `awq4` | 训练期 QLoRA 用 `nf4`；推理评测另记实际量化 |
 | `backend` | `peft` / `trl` / `vllm` | 训练实验可记训练栈，推理实验记推理后端 |
 | `mode` | `nothink` / `think` | 默认按 P8 结论；不得省略 |
-| `objective` | `finaljson` / `mix60-30-10` / `replay` | 对应训练目标 |
+| `objective` | `finaljson` / `mix50-25-25` / `replay` | 对应训练目标 |
 | `stage` | `stage-b8` / `stage-bc8` / `stage-final` | 训练阶段或 replay |
 | `train_params` | `lr1e4-r16-a32-seq2048` | 主要训练参数 |
 

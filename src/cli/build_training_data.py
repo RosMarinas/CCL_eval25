@@ -14,7 +14,7 @@ Usage:
         --output data/training/b8-answer-only.jsonl
 
     python src/cli/build_training_data.py --type bc8-mixed \\
-        --ratio 60-30-10 \\
+        --ratio 50-25-25 \\
         --answer-only data/training/b8-answer-only.jsonl \\
         --short-evidence data/teacher/train-short-evidence-filtered.jsonl \\
         --teacher-critique data/teacher/train-critique-filtered.jsonl \\
@@ -39,7 +39,7 @@ from typing import Any
 # Constants
 # ============================================================
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 SENTENCE_DELIMITERS = "。！？!?"
 
@@ -378,7 +378,7 @@ def build_bc8_mixed(args: argparse.Namespace) -> int:
     """Assemble BC8 mixed-distillation dataset.
 
     1. Read answer-only, short-evidence, and teacher-critique data.
-    2. Sample proportionally based on --ratio (default 60-30-10).
+    2. Sample proportionally based on --ratio (default 50-25-25).
     3. Each sample gets a `target` field.
     4. If teacher-critique file doesn't exist, adjust to 70/30 and warn.
     5. Shuffle all samples, then split 90/10 into train/val.
@@ -430,7 +430,7 @@ def build_bc8_mixed(args: argparse.Namespace) -> int:
             print(f"  [WARN] Teacher-critique file not found: {teacher_critique_path}", file=sys.stderr)
         print("  [WARN] Teacher-critique not available. Adjusting ratio from", file=sys.stderr)
         print(f"         {a_ratio}-{b_ratio}-{c_ratio} to accommodate.", file=sys.stderr)
-        # Redistribute: if original had 60-30-10, become 70-30-0
+        # Redistribute: if original had 50-25-25, become 67-33-0
         if a_ratio > 0 and b_ratio > 0:
             total_ab = a_ratio + b_ratio
             a_ratio = round(a_ratio / total_ab * 100)
@@ -702,8 +702,8 @@ def parse_args() -> argparse.Namespace:
     bc8.add_argument(
         "--ratio",
         type=str,
-        default="60-30-10",
-        help="Data mix ratio as A-B-C (default: 60-30-10)",
+        default="50-25-25",
+        help="Data mix ratio as A-B-C (default: 50-25-25)",
     )
     bc8.add_argument(
         "--answer-only",

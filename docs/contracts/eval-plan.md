@@ -211,7 +211,7 @@ Formatter 改坏率只在 FMT、H2、H3、H4、BCD-H 等存在 formatter 的实�
 | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | P8 | prompt-only 8B 基座 | 无训练 | baseline | | | | | | | | |
 | B8 | answer-only QLoRA | 输入题目 -> 最终 JSON | P8 | | | | | | | | |
-| BC8 | mixed distillation | answer-only 60% / short-evidence 30% / teacher-critique 10% | B8 | | | | | | | | |
+| BC8 | mixed distillation | answer-only 50% / short-evidence 25% / teacher-critique 25% | B8 | | | | | | | | |
 | BC8-final | answer-only replay | 从最佳 BC8 继续短训，只输出最终 JSON | BC8 | | | | | | | | |
 
 重点判断：

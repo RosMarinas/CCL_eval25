@@ -379,7 +379,7 @@ def run_h2(
         with torch.no_grad():
             generated = formatter_model.generate(
                 **inputs,
-                max_new_tokens=512,
+                max_new_tokens=768,
                 temperature=0.0,
                 do_sample=False,
                 pad_token_id=(

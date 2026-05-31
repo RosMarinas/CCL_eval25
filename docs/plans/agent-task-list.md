@@ -157,7 +157,7 @@ Design the QLoRA training plan for the Qwen 8B reasoner, covering B8 answer-only
 
 - [ ] Provide recommended B8 answer-only QLoRA settings. B8 output is final JSON without `choose_id` (training poems have no `choose` options).
 - [ ] Provide recommended BC8 mixed-distillation settings. Sentiment analysis is a core training target.
-- [ ] Use the initial data mix: `answer-only 60% / short-evidence 30% / teacher-critique 10%`.
+- [ ] Use the initial data mix: `answer-only 50% / short-evidence 25% / teacher-critique 25%`.
 - [ ] Define training output contracts: `final_json` (no choose_id for training poems), `evidence_draft` (with sentiment, without choose_id in draft), `critique_correction` (emotion critique targets sentiment analysis).
 - [ ] Define when to adjust the data mix (e.g., sentiment vocabulary compliance drops).
 - [ ] Define the answer-only replay procedure.

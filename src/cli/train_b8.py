@@ -13,9 +13,9 @@ Usage:
         --dev-data data/splits/eval50.json \
         --output-dir checkpoints/B8/ \
         --lora-r 16 --lora-alpha 32 \
-        --lr 1e-4 \
+        --lr 1e-5 \
         --epochs 0.3 \
-        --batch-size 4 --grad-accum 16 \
+        --batch-size 4 --grad-accum 2 \
         --seq-length 2048
 """
 
@@ -25,7 +25,8 @@ import argparse
 import json
 import logging
 import math
-import re
+import re  
+# 1,678,957 8,315,930 26,402,712 119,780,620 43,013,800 3,876,530,419
 import sys
 from pathlib import Path
 from typing import Any
@@ -44,7 +45,7 @@ from transformers import (
 
 logger = logging.getLogger(__name__)
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 # ---------------------------------------------------------------------------
 # Prompt template (zero-shot, from docs/contracts/prompt-baseline.md Section 4)
@@ -208,39 +209,26 @@ def build_training_pairs(
 # ---------------------------------------------------------------------------
 
 
-def format_chat_sample(
+def format_training_sample(
     task: dict[str, Any],
     output_json: dict[str, Any],
     tokenizer: AutoTokenizer,
 ) -> str:
-    """Format one training sample as a full chat conversation string.
+    """Format one training sample as prompt + response + EOS.
 
-    The prompt is rendered from the task, and the expected output is the
-    final JSON.  apply_chat_template adds Qwen3 special tokens and ensures
-    consistent tokenization.
+    Uses plain text (no chat template) so training matches the eval /
+    inference format exactly.  The EOS token teaches the model to stop
+    after the JSON instead of generating trailing text.
     """
     prompt = render_prompt_text(task)
     response = json.dumps(output_json, ensure_ascii=False)
-    messages = [
-        {"role": "user", "content": prompt},
-        {"role": "assistant", "content": response},
-    ]
-    return tokenizer.apply_chat_template(messages, tokenize=False)
+    eos = tokenizer.eos_token or ""
+    return prompt + response + eos
 
 
-def format_user_prompt(
-    task: dict[str, Any],
-    tokenizer: AutoTokenizer,
-) -> str:
-    """Format only the user turn with the generation-prompt suffix.
-
-    Used for evaluation (the model generates the assistant part).
-    """
-    prompt = render_prompt_text(task)
-    messages = [{"role": "user", "content": prompt}]
-    return tokenizer.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=True
-    )
+def format_user_prompt(task: dict[str, Any]) -> str:
+    """Return the plain-text prompt (no chat template), matching eval format."""
+    return render_prompt_text(task)
 
 
 # ---------------------------------------------------------------------------
@@ -264,10 +252,10 @@ def prepare_dataset(
     truncated_count = 0
 
     for task, output in pairs:
-        # Full conversation text
-        full_text = format_chat_sample(task, output, tokenizer)
-        # Prompt-only text (user + generation prompt suffix)
-        prompt_text = format_user_prompt(task, tokenizer)
+        # Full training text (prompt + response + EOS)
+        full_text = format_training_sample(task, output, tokenizer)
+        # Prompt-only text (user prompt + generation suffix)
+        prompt_text = format_user_prompt(task)
 
         full_ids = tokenizer(
             full_text,
@@ -550,7 +538,7 @@ def evaluate(
     model: AutoModelForCausalLM,
     tokenizer: AutoTokenizer,
     dev_tasks: list[dict[str, Any]],
-    max_new_tokens: int = 512,
+    max_new_tokens: int = 1024,
 ) -> dict[str, float | int]:
     """Run the model on dev tasks and compute JSON error rate.
 
@@ -636,24 +624,39 @@ def train_b8(args: argparse.Namespace) -> int:
     model = apply_lora(model, r=args.lora_r, alpha=args.lora_alpha, dropout=args.lora_dropout)
     model.gradient_checkpointing_enable()
 
-    # ---- Step 4: Tokenise dataset ----
-    logger.info("Step 4/7: Tokenising training dataset ...")
-    dataset = prepare_dataset(pairs, tokenizer, max_length=args.seq_length)
+    # ---- Step 4: Tokenise datasets ----
+    logger.info("Step 4/7: Tokenising datasets ...")
+    if args.holdout_ratio > 0:
+        import random
+        random.seed(42)
+        shuffled = list(pairs)
+        random.shuffle(shuffled)
+        split = max(1, int(len(shuffled) * (1.0 - args.holdout_ratio)))
+        train_pairs = shuffled[:split]
+        eval_pairs = shuffled[split:]
+    else:
+        train_pairs = pairs
+        eval_pairs = []
+    logger.info("  train=%d  eval=%d  holdout_ratio=%.2f", len(train_pairs), len(eval_pairs), args.holdout_ratio)
+
+    train_dataset = prepare_dataset(train_pairs, tokenizer, max_length=args.seq_length)
+    eval_dataset = prepare_dataset(eval_pairs, tokenizer, max_length=args.seq_length) if eval_pairs else None
 
     # ---- Step 5: Train ----
     logger.info("Step 5/7: Starting training ...")
-    total_samples = len(dataset)
+    total_samples = len(train_dataset)
     steps_per_epoch = max(1, math.ceil(total_samples / (args.batch_size * args.grad_accum)))
     max_steps = max(1, int(steps_per_epoch * args.epochs))
-    max_steps = max(10, max_steps)  # ensure minimum meaningful training so warmup doesn't eat all steps
+    max_steps = max(10, max_steps)
     logging_steps = max(1, max_steps // 10) if max_steps > 1 else 1
+    eval_steps = max(1, max_steps // 5) if max_steps > 1 else 1
     save_steps = max(1, max_steps)
 
     logger.info(
         "  samples=%d  per_device_bs=%d  grad_accum=%d  effective_bs=%d  "
-        "epochs=%.2f  max_steps=%d",
+        "epochs=%.2f  max_steps=%d  eval_steps=%d",
         total_samples, args.batch_size, args.grad_accum,
-        args.batch_size * args.grad_accum, args.epochs, max_steps,
+        args.batch_size * args.grad_accum, args.epochs, max_steps, eval_steps,
     )
 
     training_args = TrainingArguments(
@@ -671,6 +674,8 @@ def train_b8(args: argparse.Namespace) -> int:
         save_strategy="steps",
         save_steps=save_steps,
         save_total_limit=1,
+        eval_strategy="steps" if eval_dataset else "no",
+        eval_steps=eval_steps if eval_dataset else None,
         report_to="none",
         ddp_find_unused_parameters=False,
         gradient_checkpointing=True,
@@ -680,7 +685,8 @@ def train_b8(args: argparse.Namespace) -> int:
     trainer_kwargs = dict(
         model=model,
         args=training_args,
-        train_dataset=dataset,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
         data_collator=PadCollator(tokenizer),
     )
     # transformers >= 5.x renamed tokenizer -> processing_class
@@ -789,10 +795,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     # ---- Evaluation ----
     parser.add_argument(
+        "--holdout-ratio",
+        type=float,
+        default=0.0,
+        help="Fraction of training data to hold out as eval set for monitoring (default: 0.0). "
+        "Use 0.1 for tuning runs; 0.0 for final training.",
+    )
+    parser.add_argument(
         "--eval-max-new-tokens",
         type=int,
-        default=512,
-        help="Max generated tokens for dev eval (default: 512)",
+        default=1024,
+        help="Max generated tokens for dev eval (default: 1024)",
     )
 
     args = parser.parse_args(argv)

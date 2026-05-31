@@ -13,7 +13,7 @@ from pathlib import Path
 
 import torch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.cli.train_b8 import (
     load_dev_data,
@@ -64,11 +64,11 @@ def main():
 
     # ---- Config ----
     base_model_name = "Qwen/Qwen3-8B"
-    project_root = Path(__file__).resolve().parents[1]
+    project_root = Path(__file__).resolve().parents[2]
     adapter_path = str(project_root / "checkpoints" / "BC8-v3" / "adapter")
     eval_data_path = str(project_root / "data" / "splits" / "eval50.json")
     output_path = str(project_root / "checkpoints" / "BC8-v3" / "eval_result.json")
-    max_new_tokens = 512
+    max_new_tokens = 1024
 
     # ---- Load model ----
     print("Loading base model (4-bit quantized) ...", flush=True)

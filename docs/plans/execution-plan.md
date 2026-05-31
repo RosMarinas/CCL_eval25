@@ -171,7 +171,7 @@ python3 remote_run.py python src/cli/build_training_data.py \
 ```bash
 python3 remote_run.py python src/cli/build_training_data.py \
   --type bc8-mixed \
-  --ratio 60-30-10 \
+  --ratio 50-25-25 \
   --answer-only data/training/b8-answer-only.jsonl \
   --short-evidence data/teacher/train-short-evidence-filtered.jsonl \
   --teacher-critique data/teacher/train-critique-filtered.jsonl \
