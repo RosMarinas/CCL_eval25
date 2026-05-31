@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections import OrderedDict
 from typing import Any
 
 try:
     from src.schema import validate_output
-except ImportError:  # I1 owns schema.py; keep eval importable while it is absent.
+except ImportError:
+    logging.warning(
+        "src.schema.validate_output not available; skipping schema-level validation"
+    )
     validate_output = None
+
+logger = logging.getLogger(__name__)
 
 
 RESULT_FIELDS = [
@@ -132,6 +138,7 @@ EXPLICIT_THINKING_RE = re.compile(
     re.IGNORECASE,
 )
 FENCE_RE = re.compile(r"^\s*```(?:json|JSON)?\s*(.*?)\s*```\s*$", re.DOTALL)
+FENCE_LOOSE_RE = re.compile(r"```(?:json|JSON)?\s*(\{[\s\S]*?\})\s*```")
 
 
 def parse_json_object(raw: str) -> tuple[dict[str, Any] | None, list[str]]:
@@ -151,6 +158,10 @@ def parse_json_object(raw: str) -> tuple[dict[str, Any] | None, list[str]]:
     fenced = _extract_fenced_json(think_stripped)
     if fenced is not None:
         candidates.append(fenced)
+    # Non-anchored fallback for cases where fence is surrounded by extra text
+    fenced_loose = _extract_fenced_json_loose(think_stripped)
+    if fenced_loose is not None and fenced_loose != fenced:
+        candidates.append(fenced_loose)
     bracketed = _extract_first_json_object(think_stripped)
     if bracketed is not None:
         candidates.append(bracketed)
@@ -545,6 +556,14 @@ def _has_thinking_trace(text: str) -> bool:
 
 def _extract_fenced_json(text: str) -> str | None:
     match = FENCE_RE.match(text)
+    if not match:
+        return None
+    return match.group(1).strip()
+
+
+def _extract_fenced_json_loose(text: str) -> str | None:
+    """Non-anchored fallback: extract the first fenced JSON object anywhere."""
+    match = FENCE_LOOSE_RE.search(text)
     if not match:
         return None
     return match.group(1).strip()

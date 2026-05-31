@@ -53,6 +53,7 @@ from src.eval import (
     HARD_JSON_ERRORS,
     classify_json_errors as eval_classify_json_errors,
     compute_json_error_rates,
+    parse_json_object,
 )
 from src.harness import (
     build_formatter_input,
@@ -91,43 +92,8 @@ def render_prompt_text(task_json: dict[str, Any]) -> str:
     )
 
 
-def parse_json_output(raw: str) -> dict[str, Any] | None:
-    """Extract and parse a JSON object from free-form model output.
 
-    Uses the same logic as train_b8.py evaluate().
-    """
-    import re
-    text = raw.strip()
-    if not text:
-        return None
 
-    # 1. Direct parse
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-
-    # 2. Fenced code block
-    m = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
-    if m:
-        try:
-            return json.loads(m.group(1).strip())
-        except json.JSONDecodeError:
-            pass
-
-    # 3. First JSON object
-    decoder = json.JSONDecoder()
-    for start, ch in enumerate(text):
-        if ch != "{":
-            continue
-        try:
-            obj, _ = decoder.raw_decode(text[start:])
-            if isinstance(obj, dict):
-                return obj
-        except json.JSONDecodeError:
-            continue
-
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -211,12 +177,13 @@ def generate_reasoner_outputs(
 
         generated_ids = generated[0][input_len:]
         raw = tokenizer.decode(generated_ids, skip_special_tokens=True)
-        parsed = parse_json_output(raw)
+        parsed, parse_errors = parse_json_object(raw)
 
         outputs.append({
             "idx": task.get("idx"),
             "raw_output": raw,
             "parsed": parsed,
+            "parse_errors": parse_errors,
             "latency_sec": round(latency, 3),
         })
 
@@ -271,6 +238,7 @@ def run_h1(
     for task, ro in zip(tasks, reasoner_outputs):
         parsed = ro.get("parsed")
         raw = ro.get("raw_output", "")
+        parse_errs = ro.get("parse_errors", [])
 
         # Wrap BC8 output as reasoner_output with draft_answer
         wrapped: dict[str, Any] | None = (
@@ -280,11 +248,13 @@ def run_h1(
         # Apply rule-only postprocess
         final_answer = fallback_final(task, wrapped)
 
-        # Classify JSON errors on final answer
+        # Classify JSON errors on final answer (pre-computed parse_errors
+        # avoids re-parsing raw text)
         error_categories = eval_classify_json_errors(
             raw,
             task,
             parsed_json=final_answer,
+            parse_errors=list(parse_errs),
         )
 
         # Track key coverage
@@ -407,33 +377,38 @@ def run_h2(
 
         parsed = ro.get("parsed")
         raw = ro.get("raw_output", "")
+        parse_errs = ro.get("parse_errors", [])
 
         # Wrapped reasoner_output for harness functions
         wrapped: dict[str, Any] | None = (
             {"draft_answer": parsed} if parsed else None
         )
 
-        # Classify draft errors (before formatter)
+        # Classify draft errors (before formatter; pass pre-computed
+        # parse_errors to avoid re-parsing raw text)
         draft_categories = eval_classify_json_errors(
-            raw, task, parsed_json=parsed
+            raw, task, parsed_json=parsed, parse_errors=list(parse_errs)
         )
         draft_had_core_error = bool(set(draft_categories) & CORE_JSON_ERRORS)
 
         # Build formatter input and call formatter
+        formatter_failed = True
         if wrapped is not None:
             report = validate_reasoner_output(task, wrapped)
             formatter_input = build_formatter_input(task, wrapped, report)
             formatter_raw = formatter_generate(formatter_input)
-            formatter_parsed = parse_json_output(formatter_raw)
+            formatter_parsed, _ = parse_json_object(formatter_raw)
             formatter_called_count += 1
 
             # If formatter output passes validation, use it
             final_report = validate_final_output(task, formatter_parsed)
             if should_skip_formatter(final_report) and formatter_parsed is not None:
                 final_answer = formatter_parsed
+                formatter_failed = False
             else:
                 fallback_used_count += 1
                 final_answer = fallback_final(task, wrapped)
+                formatter_failed = True
         else:
             # Parse failed — can't call formatter, fallback directly
             formatter_parsed = None
@@ -466,9 +441,7 @@ def run_h2(
             "draft_error_categories": draft_categories,
             "final_error_categories": final_categories,
             "formatter_called": wrapped is not None,
-            "fallback_used": wrapped is None or not should_skip_formatter(
-                validate_final_output(task, formatter_parsed)
-            ),
+            "fallback_used": wrapped is None or formatter_failed,
             "word_coverage": word_coverage,
             "sent_coverage": sent_coverage,
         })

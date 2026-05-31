@@ -82,23 +82,6 @@ def parse_reasoner_output(raw_output: str | dict[str, Any] | None) -> dict[str, 
     parsed, _ = _parse_json_object_eval(text)
     return parsed
 
-    # Dead code: fallback path kept for reference.
-    # These functions are only reached if the canonical parser above fails,
-    # which should not happen in normal operation.
-    fenced = re.search(r"```(?:json)?\s*(.*?)```", text, flags=re.DOTALL | re.IGNORECASE)
-    if fenced:
-        text = fenced.group(1).strip()
-
-    parsed = _loads_object(text)
-    if parsed is not None:
-        return parsed
-
-    for candidate in _json_object_candidates(text):
-        parsed = _loads_object(candidate)
-        if parsed is not None:
-            return parsed
-    return None
-
 
 def validate_reasoner_output(task: dict[str, Any], reasoner_output: dict[str, Any] | None) -> Report:
     report = _empty_report(valid_json=reasoner_output is not None)
@@ -479,39 +462,4 @@ def _is_empty_answer(value: Any) -> bool:
     return True
 
 
-def _loads_object(text: str) -> dict[str, Any] | None:
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        return None
-    return parsed if isinstance(parsed, dict) else None
 
-
-def _json_object_candidates(text: str) -> list[str]:
-    candidates = []
-    starts = [index for index, char in enumerate(text) if char == "{"]
-    for start in starts:
-        depth = 0
-        in_string = False
-        escaped = False
-        for index in range(start, len(text)):
-            char = text[index]
-            if escaped:
-                escaped = False
-                continue
-            if char == "\\":
-                escaped = True
-                continue
-            if char == '"':
-                in_string = not in_string
-                continue
-            if in_string:
-                continue
-            if char == "{":
-                depth += 1
-            elif char == "}":
-                depth -= 1
-                if depth == 0:
-                    candidates.append(text[start : index + 1])
-                    break
-    return candidates

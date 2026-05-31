@@ -31,7 +31,6 @@ import json
 import logging
 import math
 import random
-import re
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -47,6 +46,8 @@ from transformers import (
     Trainer,
     TrainingArguments,
 )
+
+from src.eval import parse_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -650,40 +651,6 @@ class PadCollator:
 # ---------------------------------------------------------------------------
 
 
-def parse_json_output(raw: str) -> dict[str, Any] | None:
-    """Extract and parse a JSON object from free-form model output."""
-    text = raw.strip()
-    if not text:
-        return None
-
-    # 1. Direct parse
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-
-    # 2. Fenced code block
-    m = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
-    if m:
-        try:
-            return json.loads(m.group(1).strip())
-        except json.JSONDecodeError:
-            pass
-
-    # 3. First JSON object
-    decoder = json.JSONDecoder()
-    for start, ch in enumerate(text):
-        if ch != "{":
-            continue
-        try:
-            obj, _ = decoder.raw_decode(text[start:])
-            if isinstance(obj, dict):
-                return obj
-        except json.JSONDecodeError:
-            continue
-
-    return None
-
 
 def classify_json_errors(
     parsed: dict[str, Any] | None,
@@ -791,7 +758,7 @@ def evaluate(
         generated_ids = outputs[0][inputs["input_ids"].shape[1]:]
         raw = tokenizer.decode(generated_ids, skip_special_tokens=True)
 
-        parsed = parse_json_output(raw)
+        parsed, _parse_errs = parse_json_object(raw)
         error_categories = classify_json_errors(parsed, task)
         core = {
             "parse_error",

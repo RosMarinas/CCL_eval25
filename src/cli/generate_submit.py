@@ -106,6 +106,20 @@ def main():
                     logger.warning("idx=%d: invalid choose_id '%s', options=%s",
                                    task["idx"], parsed["choose_id"], list(choose_opts.keys()))
 
+            # Key coverage warnings (non-blocking: log but don't invalidate)
+            if valid and parsed is not None:
+                expected_words = set(task.get("qa_words", []))
+                got_words = set(parsed.get("ans_qa_words", {}))
+                if expected_words - got_words:
+                    logger.warning("idx=%d: missing word keys: %s",
+                                   task["idx"], sorted(expected_words - got_words))
+
+                expected_sents = set(task.get("qa_sents", []))
+                got_sents = set(parsed.get("ans_qa_sents", {}))
+                if expected_sents - got_sents:
+                    logger.warning("idx=%d: missing sentence keys: %s",
+                                   task["idx"], sorted(expected_sents - got_sents))
+
         if valid:
             submit.append({
                 "idx": task["idx"],

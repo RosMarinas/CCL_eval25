@@ -18,9 +18,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from src.cli.train_b8 import (
     load_dev_data,
     render_prompt_text,
-    parse_json_output,
     classify_json_errors,
 )
+from src.eval import parse_json_object
 from peft import PeftModel
 from transformers import (
     AutoModelForCausalLM,
@@ -114,7 +114,7 @@ def main():
 
         generated_ids = outputs[0][inputs["input_ids"].shape[1]:]
         raw = tokenizer.decode(generated_ids, skip_special_tokens=True)
-        parsed = parse_json_output(raw)
+        parsed, _ = parse_json_object(raw)
         errors = classify_json_errors(parsed, task)
 
         has_core_error = bool(set(errors) & core_error_set)
