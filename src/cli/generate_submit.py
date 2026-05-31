@@ -5,9 +5,8 @@ import torch
 from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from src.eval import parse_json_object
-from src.cli.train_b8 import render_prompt_text
+from src.training_utils import render_prompt_text
 
 logger = logging.getLogger(__name__)
 

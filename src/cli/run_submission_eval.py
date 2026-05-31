@@ -47,7 +47,7 @@ import torch
 from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from src.cli.train_b8 import load_dev_data, load_quantized_model
+from src.training_utils import load_dev_data, load_quantized_model
 from src.eval import (
     CORE_JSON_ERRORS,
     HARD_JSON_ERRORS,

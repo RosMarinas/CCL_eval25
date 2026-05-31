@@ -37,8 +37,7 @@ import torch
 from peft import PeftModel
 from transformers import Trainer, TrainingArguments
 
-# Reuse helpers from the B8 training pipeline
-from src.cli.train_b8 import (
+from src.training_utils import (
     PadCollator,
     build_training_pairs,
     evaluate,

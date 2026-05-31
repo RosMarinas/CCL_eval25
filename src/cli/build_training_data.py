@@ -35,6 +35,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from src.schema import unique_preserve_order
+
 # ============================================================
 # Constants
 # ============================================================
@@ -91,15 +93,8 @@ def _split_sentences(content: str) -> list[str]:
     return result
 
 
-def unique_preserve_order(items: list[str]) -> list[str]:
-    """Deduplicate a list preserving order."""
-    seen: set[str] = set()
-    out: list[str] = []
-    for item in items:
-        if item not in seen:
-            seen.add(item)
-            out.append(item)
-    return out
+
+
 
 
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -756,15 +751,6 @@ def parse_args() -> argparse.Namespace:
     )
 
     args = parser.parse_args()
-
-    # Normalize sub-command name (strip underscores to match internal function names)
-    if args.type in ("answer-only",):
-        pass
-    elif args.type in ("bc8-mixed",):
-        pass
-    elif args.type in ("sentiment-mapping",):
-        pass
-
     return args
 
 

@@ -24,7 +24,6 @@ from transformers import (
     BitsAndBytesConfig,
 )
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from src.eval import (
     CORE_JSON_ERRORS,
     FORMAT_STYLE_ERRORS,
@@ -32,7 +31,7 @@ from src.eval import (
     classify_json_errors,
     parse_json_object,
 )
-from src.cli.train_b8 import render_prompt_text
+from src.training_utils import render_prompt_text
 
 logger = logging.getLogger(__name__)
 

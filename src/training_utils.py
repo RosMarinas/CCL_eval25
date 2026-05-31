@@ -1,54 +1,33 @@
-#!/usr/bin/env python3
-"""B8 answer-only QLoRA training for CCL25 format confirmation.
+"""Shared utilities for training, evaluation, and prompt rendering.
 
-Fine-tunes Qwen3-8B with QLoRA (4-bit NF4, LoRA rank 16) to output
-the CCL25 final JSON schema (idx + ans_qa_words + ans_qa_sents +
-choose_id).  Shortened 0.3-epoch run targeting the JSON typo errors
-identified in the P8 baseline.
-
-Usage:
-    python src/cli/train_b8.py \
-        --base-model Qwen/Qwen3-8B \
-        --train-data data/training/b8-answer-only.jsonl \
-        --dev-data data/splits/eval50.json \
-        --output-dir checkpoints/B8/ \
-        --lora-r 16 --lora-alpha 32 \
-        --lr 1e-5 \
-        --epochs 0.3 \
-        --batch-size 4 --grad-accum 2 \
-        --seq-length 2048
+Extracted from src/cli/train_b8.py and src/cli/train_bc8.py to eliminate
+duplication across CLI scripts.  All training and eval scripts import
+from here instead of from each other.
 """
 
 from __future__ import annotations
 
-import argparse
 import json
 import logging
-import math
-import sys
 from pathlib import Path
 from typing import Any
 
 import torch
-import transformers
 from datasets import Dataset
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     BitsAndBytesConfig,
-    Trainer,
-    TrainingArguments,
 )
 
 from src.eval import parse_json_object
+from src.schema import unique_preserve_order
 
 logger = logging.getLogger(__name__)
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
 # ---------------------------------------------------------------------------
-# Prompt template (zero-shot, from docs/contracts/prompt-baseline.md Section 4)
+# Shared constants
 # ---------------------------------------------------------------------------
 
 ZERO_SHOT_PROMPT = """你需要完成古诗词理解任务。请根据输入诗歌、目标词语、目标句子和情感选项，直接生成最终答案 JSON。
@@ -68,7 +47,20 @@ ZERO_SHOT_PROMPT = """你需要完成古诗词理解任务。请根据输入诗�
 
 现在只输出最终 JSON："""
 
-# Schema: the only permitted top-level keys in the final JSON
+EVIDENCE_DRAFT_PROMPT = """你需要完成古诗词理解任务。请根据输入诗歌、目标词语、目标句子和情感选项，生成分析证据、情感分析和草稿答案。
+
+输出要求：
+- 只输出一个合法 JSON 对象，包含 evidence、sentiment 和 draft_answer 三个字段。
+- evidence 包含 words（词语解释对象）、sentences（句子翻译对象）和 emotion（情感分析列表）三个子字段。
+- sentiment 包含 primary（主要情感标签，必须使用受控词汇表中的标签）、secondary（次要情感标签列表）和 rationale（简短理由，不超过80字）。
+- draft_answer 包含 ans_qa_words 和 ans_qa_sents，不包含 choose_id。
+- 不要输出 Markdown 代码块或任何额外文字。
+
+输入：
+{input_json}
+
+现在输出 evidence、sentiment 和 draft_answer："""
+
 TOP_FIELDS = frozenset({"idx", "ans_qa_words", "ans_qa_sents", "choose_id"})
 
 # ---------------------------------------------------------------------------
@@ -140,7 +132,7 @@ def load_dev_data(path: str | Path) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# Prompt construction
+# Task construction and prompt rendering
 # ---------------------------------------------------------------------------
 
 
@@ -153,7 +145,7 @@ def build_task_json(
     qa_sents: list[str] | None = None,
     choose: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Build the unified input task JSON per docs/contracts/data-schema.md Section 1."""
+    """Build the unified input task JSON per docs/spec/data-schema.md Section 1."""
     return {
         "idx": idx,
         "title": title,
@@ -170,6 +162,23 @@ def render_prompt_text(task_json: dict[str, Any]) -> str:
     return ZERO_SHOT_PROMPT.format(
         input_json=json.dumps(task_json, ensure_ascii=False)
     )
+
+
+def render_evidence_draft_text(task_json: dict[str, Any]) -> str:
+    """Fill the evidence-draft prompt template with the task JSON."""
+    return EVIDENCE_DRAFT_PROMPT.format(
+        input_json=json.dumps(task_json, ensure_ascii=False)
+    )
+
+
+def format_user_prompt(task: dict[str, Any]) -> str:
+    """Return the plain-text prompt (no chat template), matching eval format."""
+    return render_prompt_text(task)
+
+
+# ---------------------------------------------------------------------------
+# Training data assembly
+# ---------------------------------------------------------------------------
 
 
 def build_training_pairs(
@@ -204,38 +213,6 @@ def build_training_pairs(
     return pairs
 
 
-# ---------------------------------------------------------------------------
-# Chat-template formatting
-# ---------------------------------------------------------------------------
-
-
-def format_training_sample(
-    task: dict[str, Any],
-    output_json: dict[str, Any],
-    tokenizer: AutoTokenizer,
-) -> str:
-    """Format one training sample as prompt + response + EOS.
-
-    Uses plain text (no chat template) so training matches the eval /
-    inference format exactly.  The EOS token teaches the model to stop
-    after the JSON instead of generating trailing text.
-    """
-    prompt = render_prompt_text(task)
-    response = json.dumps(output_json, ensure_ascii=False)
-    eos = tokenizer.eos_token or ""
-    return prompt + response + eos
-
-
-def format_user_prompt(task: dict[str, Any]) -> str:
-    """Return the plain-text prompt (no chat template), matching eval format."""
-    return render_prompt_text(task)
-
-
-# ---------------------------------------------------------------------------
-# Dataset preparation
-# ---------------------------------------------------------------------------
-
-
 def prepare_dataset(
     pairs: list[tuple[dict[str, Any], dict[str, Any]]],
     tokenizer: AutoTokenizer,
@@ -243,19 +220,19 @@ def prepare_dataset(
 ) -> Dataset:
     """Tokenise and produce input_ids + labels with prompt masking.
 
-    Labels for the prompt part (user turn + system header) are set to -100
-    so the language-model loss is computed only on the assistant response.
+    Labels for the prompt part are set to -100 so the language-model loss
+    is computed only on the assistant response.
     """
     all_input_ids: list[list[int]] = []
     all_labels: list[list[int]] = []
     all_attention_masks: list[list[int]] = []
     truncated_count = 0
 
-    for task, output in pairs:
-        # Full training text (prompt + response + EOS)
-        full_text = format_training_sample(task, output, tokenizer)
-        # Prompt-only text (user prompt + generation suffix)
-        prompt_text = format_user_prompt(task)
+    for task, output_json in pairs:
+        prompt_text = render_prompt_text(task)
+        response_text = json.dumps(output_json, ensure_ascii=False)
+        eos = tokenizer.eos_token or ""
+        full_text = prompt_text + response_text + eos
 
         full_ids = tokenizer(
             full_text,
@@ -275,14 +252,12 @@ def prepare_dataset(
         if len(full_ids) >= max_length:
             truncated_count += 1
 
-        # Labels: mask the prompt, keep the response
         labels = ([-100] * min(prompt_len, len(full_ids)) + full_ids[prompt_len:])
 
         if len(full_ids) > max_length:
             full_ids = full_ids[:max_length]
             labels = labels[:max_length]
 
-        # Pad labels to match input length if prompt was truncated
         while len(labels) < len(full_ids):
             labels.append(-100)
 
@@ -312,7 +287,10 @@ def prepare_dataset(
 # ---------------------------------------------------------------------------
 
 
-def load_quantized_model(model_name: str) -> tuple[AutoModelForCausalLM, AutoTokenizer]:
+def load_quantized_model(
+    model_name: str,
+    device: str = "auto",
+) -> tuple[AutoModelForCausalLM, AutoTokenizer]:
     """Load model in 4-bit NF4 with double quant and bf16 compute dtype."""
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
@@ -332,7 +310,7 @@ def load_quantized_model(model_name: str) -> tuple[AutoModelForCausalLM, AutoTok
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
         quantization_config=bnb_config,
-        device_map="auto",
+        device_map=device,
         torch_dtype=torch.bfloat16,
         trust_remote_code=True,
     )
@@ -413,18 +391,6 @@ class PadCollator:
 # ---------------------------------------------------------------------------
 
 
-
-
-def _unique(items: list[str]) -> list[str]:
-    seen: set[str] = set()
-    out: list[str] = []
-    for item in items:
-        if item not in seen:
-            seen.add(item)
-            out.append(item)
-    return out
-
-
 def classify_json_errors(
     parsed: dict[str, Any] | None,
     task: dict[str, Any],
@@ -438,20 +404,16 @@ def classify_json_errors(
 
     errors: list[str] = []
 
-    # Top-level field coverage
     missing = TOP_FIELDS - parsed.keys()
     if missing:
         errors.append("missing_top_field")
 
-    # Extra fields
     if parsed.keys() - TOP_FIELDS:
         errors.append("extra_top_field")
 
-    # idx fidelity
     if "idx" in parsed and parsed.get("idx") != task.get("idx"):
         errors.append("idx_mismatch")
 
-    # Field type checks
     word_answers = parsed.get("ans_qa_words")
     sent_answers = parsed.get("ans_qa_sents")
     choose_id = parsed.get("choose_id")
@@ -463,9 +425,8 @@ def classify_json_errors(
     if "choose_id" in parsed and not isinstance(choose_id, str):
         errors.append("wrong_field_type")
 
-    # Key coverage
-    target_words = _unique(task.get("qa_words", []))
-    target_sents = _unique(task.get("qa_sents", []))
+    target_words = unique_preserve_order(task.get("qa_words", []))
+    target_sents = unique_preserve_order(task.get("qa_sents", []))
 
     if isinstance(word_answers, dict):
         word_keys = {str(k) for k in word_answers}
@@ -477,7 +438,6 @@ def classify_json_errors(
         if {str(k) for k in target_sents} - sent_keys:
             errors.append("missing_sentence_key")
 
-    # Answer value checks
     if isinstance(word_answers, dict):
         for v in word_answers.values():
             if not isinstance(v, str) or not v.strip():
@@ -490,7 +450,6 @@ def classify_json_errors(
                 errors.append("empty_required_answer")
                 break
 
-    # choose_id validity
     choices = task.get("choose") or {}
     if isinstance(choose_id, str):
         if choices and choose_id not in {str(k) for k in choices}:
@@ -521,9 +480,6 @@ def evaluate(
     json_errors = 0
 
     for task in dev_tasks:
-        # Use plain-text prompt (no chat template wrapping) to match the
-        # baseline runner format — the chat template produces different
-        # token sequences that inflate JSON error rates artificially.
         prompt = render_prompt_text(task)
         inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
 
@@ -556,267 +512,7 @@ def evaluate(
 
     error_rate = json_errors / total if total else 0.0
     logger.info(
-        "Dev eval: %d / %d samples with JSON errors (rate = %.4f)",
-        json_errors, total, error_rate,
+        "Evaluation: %d/%d JSON errors (%.1f%%)",
+        json_errors, total, error_rate * 100,
     )
-    return {"json_error_rate": error_rate, "error_count": json_errors, "total": total}
-
-
-# ---------------------------------------------------------------------------
-# Orchestration
-# ---------------------------------------------------------------------------
-
-
-def train_b8(args: argparse.Namespace) -> int:
-    """Execute the B8 training pipeline."""
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # ---- Step 1: Load data ----
-    logger.info("Step 1/7: Loading raw data ...")
-    source_index = load_train_source(args.train_source)
-    answer_records = load_answer_only(args.train_data)
-
-    # ---- Step 2: Build (task, output) training pairs ----
-    logger.info("Step 2/7: Constructing training pairs ...")
-    pairs = build_training_pairs(answer_records, source_index)
-    if not pairs:
-        logger.error("No training pairs could be constructed.  Aborting.")
-        return 1
-    logger.info("  %d pairs ready", len(pairs))
-
-    # ---- Step 3: Load model + tokenizer with 4-bit quant ----
-    logger.info("Step 3/7: Loading QLoRA model ...")
-    model, tokenizer = load_quantized_model(args.base_model)
-    model = apply_lora(model, r=args.lora_r, alpha=args.lora_alpha, dropout=args.lora_dropout)
-    model.gradient_checkpointing_enable()
-
-    # ---- Step 4: Tokenise datasets ----
-    logger.info("Step 4/7: Tokenising datasets ...")
-    if args.holdout_ratio > 0:
-        import random
-        random.seed(42)
-        shuffled = list(pairs)
-        random.shuffle(shuffled)
-        split = max(1, int(len(shuffled) * (1.0 - args.holdout_ratio)))
-        train_pairs = shuffled[:split]
-        eval_pairs = shuffled[split:]
-    else:
-        train_pairs = pairs
-        eval_pairs = []
-    logger.info("  train=%d  eval=%d  holdout_ratio=%.2f", len(train_pairs), len(eval_pairs), args.holdout_ratio)
-
-    train_dataset = prepare_dataset(train_pairs, tokenizer, max_length=args.seq_length)
-    eval_dataset = prepare_dataset(eval_pairs, tokenizer, max_length=args.seq_length) if eval_pairs else None
-
-    # ---- Step 5: Train ----
-    logger.info("Step 5/7: Starting training ...")
-    total_samples = len(train_dataset)
-    steps_per_epoch = max(1, math.ceil(total_samples / (args.batch_size * args.grad_accum)))
-    max_steps = max(1, int(steps_per_epoch * args.epochs))
-    max_steps = max(10, max_steps)
-    logging_steps = max(1, max_steps // 10) if max_steps > 1 else 1
-    eval_steps = max(1, max_steps // 5) if max_steps > 1 else 1
-    save_steps = max(1, max_steps)
-
-    logger.info(
-        "  samples=%d  per_device_bs=%d  grad_accum=%d  effective_bs=%d  "
-        "epochs=%.2f  max_steps=%d  eval_steps=%d",
-        total_samples, args.batch_size, args.grad_accum,
-        args.batch_size * args.grad_accum, args.epochs, max_steps, eval_steps,
-    )
-
-    training_args = TrainingArguments(
-        output_dir=str(output_dir),
-        per_device_train_batch_size=args.batch_size,
-        gradient_accumulation_steps=args.grad_accum,
-        max_steps=max_steps,
-        learning_rate=args.lr,
-        warmup_ratio=args.warmup_ratio,
-        lr_scheduler_type="cosine",
-        weight_decay=args.weight_decay,
-        bf16=True,
-        tf32=True,
-        logging_steps=logging_steps,
-        save_strategy="steps",
-        save_steps=save_steps,
-        save_total_limit=1,
-        eval_strategy="steps" if eval_dataset else "no",
-        eval_steps=eval_steps if eval_dataset else None,
-        report_to="none",
-        ddp_find_unused_parameters=False,
-        gradient_checkpointing=True,
-        optim="adamw_torch",
-    )
-
-    trainer_kwargs = dict(
-        model=model,
-        args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
-        data_collator=PadCollator(tokenizer),
-    )
-    # transformers >= 5.x renamed tokenizer -> processing_class
-    try:
-        trainer = Trainer(**trainer_kwargs, processing_class=tokenizer)
-    except TypeError:
-        trainer = Trainer(**trainer_kwargs, tokenizer=tokenizer)
-    trainer.train()
-
-    # ---- Step 6: Save LoRA adapters (not full model) ----
-    logger.info("Step 6/7: Saving LoRA adapters ...")
-    adapter_path = output_dir / "adapter"
-    model.save_pretrained(str(adapter_path))
-    tokenizer.save_pretrained(str(adapter_path))
-    logger.info("  Adapters saved to %s", adapter_path)
-
-    # ---- Step 7: Evaluate on dev set ----
-    if args.dev_data:
-        logger.info("Step 7/7: Evaluating on dev set ...")
-        model.gradient_checkpointing_disable()
-        dev_tasks = load_dev_data(args.dev_data)
-        eval_results = evaluate(model, tokenizer, dev_tasks, args.eval_max_new_tokens)
-
-        eval_path = output_dir / "dev_eval.json"
-        eval_path.write_text(
-            json.dumps(eval_results, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        logger.info("  Eval results written to %s", eval_path)
-
-        if eval_results["json_error_rate"] == 0.0:
-            logger.info(
-                "  *** Dev JSON error rate is 0 — format confirmed.  "
-                "Early-stop criteria satisfied. ***"
-            )
-
-    logger.info("B8 training complete.")
-    return 0
-
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
-
-
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="B8 answer-only QLoRA training for CCL25 format confirmation.",
-    )
-
-    # ---- Model ----
-    parser.add_argument(
-        "--base-model",
-        default="Qwen/Qwen3-8B",
-        help="HuggingFace model ID (default: Qwen/Qwen3-8B)",
-    )
-
-    # ---- Data ----
-    parser.add_argument(
-        "--train-data",
-        required=True,
-        help="Path to b8-answer-only.jsonl",
-    )
-    parser.add_argument(
-        "--train-source",
-        default=None,
-        help="Path to train-data/ directory (default: <project>/data/train-data)",
-    )
-    parser.add_argument(
-        "--dev-data",
-        default=None,
-        help="Path to dev split JSON (e.g. data/splits/eval50.json)",
-    )
-
-    # ---- Checkpoint output ----
-    parser.add_argument(
-        "--output-dir",
-        default="checkpoints/B8",
-        help="Output directory (default: checkpoints/B8)",
-    )
-
-    # ---- LoRA hyper-parameters ----
-    parser.add_argument("--lora-r", type=int, default=16, help="LoRA rank (default: 16)")
-    parser.add_argument("--lora-alpha", type=int, default=32, help="LoRA alpha (default: 32)")
-    parser.add_argument(
-        "--lora-dropout", type=float, default=0.05, help="LoRA dropout (default: 0.05)"
-    )
-
-    # ---- Optimisation ----
-    # Conservative LR for a strong, well-trained instruct model —
-    # Qwen3-8B is already highly capable; high LR risks catastrophic
-    # forgetting of pre-trained instruction-following behavior.
-    parser.add_argument("--lr", type=float, default=2e-5, help="Peak learning rate (default: 2e-5)")
-    parser.add_argument("--epochs", type=float, default=2.0, help="Training epochs (default: 2.0)")
-    parser.add_argument("--batch-size", type=int, default=4, help="Per-device batch size (default: 4)")
-    parser.add_argument(
-        "--grad-accum", type=int, default=16, help="Gradient accumulation steps (default: 16)"
-    )
-    parser.add_argument(
-        "--seq-length", type=int, default=2048, help="Max sequence length (default: 2048)"
-    )
-    parser.add_argument(
-        "--warmup-ratio", type=float, default=0.03, help="Warmup ratio (default: 0.03)"
-    )
-    parser.add_argument("--weight-decay", type=float, default=0.0, help="Weight decay (default: 0.0)")
-
-    # ---- Evaluation ----
-    parser.add_argument(
-        "--holdout-ratio",
-        type=float,
-        default=0.0,
-        help="Fraction of training data to hold out as eval set for monitoring (default: 0.0). "
-        "Use 0.1 for tuning runs; 0.0 for final training.",
-    )
-    parser.add_argument(
-        "--eval-max-new-tokens",
-        type=int,
-        default=1024,
-        help="Max generated tokens for dev eval (default: 1024)",
-    )
-
-    args = parser.parse_args(argv)
-
-    # Resolve --train-source default relative to project root
-    if args.train_source is None:
-        args.train_source = str(PROJECT_ROOT / "data" / "train-data")
-
-    # Resolve relative paths
-    args.train_data = str(Path(args.train_data).resolve())
-    args.train_source = str(Path(args.train_source).resolve())
-    if args.dev_data:
-        args.dev_data = str(Path(args.dev_data).resolve())
-    args.output_dir = str(Path(args.output_dir).resolve())
-
-    return args
-
-
-def setup_logging() -> None:
-    logging.basicConfig(
-        format="%(asctime)s [%(levelname)s] %(message)s",
-        datefmt="%H:%M:%S",
-        level=logging.INFO,
-        stream=sys.stderr,
-    )
-
-
-def main() -> None:
-    args = parse_args()
-    setup_logging()
-    logger.info("Arguments: %s", vars(args))
-
-    if not torch.cuda.is_available():
-        logger.error("CUDA is not available.  Training requires a GPU.")
-        sys.exit(1)
-
-    try:
-        exit_code = train_b8(args)
-    except Exception:
-        logger.exception("Training failed unexpectedly")
-        exit_code = 1
-
-    sys.exit(exit_code)
-
-
-if __name__ == "__main__":
-    main()
+    return {"json_errors": json_errors, "total": total, "json_error_rate": error_rate}

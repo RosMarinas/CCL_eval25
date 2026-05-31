@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Evaluate the B8 QLoRA model on eval50.json.
+"""Evaluate the BC8-final QLoRA model on eval50.json.
 
 Loads the base model with 4-bit quantization (eval-only, no kbit training
-prep which casts to fp32 and blows up memory), applies the LoRA adapter,
-and runs generation on dev samples using plain-text prompts.
-Saves results to checkpoints/B8/eval_result.json.
+prep which casts to fp32 and blows up memory), applies the BC8-final LoRA
+adapter, and runs generation on dev samples using plain-text prompts.
+Saves results to checkpoints/BC8-final/eval_result.json.
 """
 
 import json
@@ -13,9 +13,7 @@ from pathlib import Path
 
 import torch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-
-from src.cli.train_b8 import (
+from src.training_utils import (
     load_dev_data,
     render_prompt_text,
     classify_json_errors,
@@ -65,9 +63,9 @@ def main():
     # ---- Config ----
     base_model_name = "Qwen/Qwen3-8B"
     project_root = Path(__file__).resolve().parents[2]
-    adapter_path = str(project_root / "checkpoints" / "B8" / "adapter")
+    adapter_path = str(project_root / "checkpoints" / "BC8-final" / "adapter")
     eval_data_path = str(project_root / "data" / "splits" / "eval50.json")
-    output_path = str(project_root / "checkpoints" / "B8" / "eval_result.json")
+    output_path = str(project_root / "checkpoints" / "BC8-final" / "eval_result.json")
     max_new_tokens = 1024
 
     # ---- Load model ----

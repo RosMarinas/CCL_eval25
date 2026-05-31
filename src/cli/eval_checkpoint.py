@@ -1,26 +1,24 @@
 #!/usr/bin/env python3
-"""Evaluate the BC8-final QLoRA model on eval50.json.
+"""Evaluate a QLoRA checkpoint (B8/BC8/BC8-final) on eval50.json.
 
-Loads the base model with 4-bit quantization (eval-only, no kbit training
-prep which casts to fp32 and blows up memory), applies the BC8-final LoRA
-adapter, and runs generation on dev samples using plain-text prompts.
-Saves results to checkpoints/BC8-final/eval_result.json.
+Loads the base model with 4-bit quantization, applies a LoRA adapter,
+and runs generation on dev samples using plain-text prompts.
+
+Usage:
+    uv run python src/cli/eval_checkpoint.py \\
+        --checkpoint checkpoints/B8/adapter \\
+        --output checkpoints/B8/eval_result.json
+
+This replaces the three nearly-identical eval_b8.py, eval_bc8.py, and
+eval_bc8_final.py scripts.
 """
 
+import argparse
 import json
 import sys
 from pathlib import Path
 
 import torch
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-
-from src.cli.train_b8 import (
-    load_dev_data,
-    render_prompt_text,
-    classify_json_errors,
-)
-from src.eval import parse_json_object
 from peft import PeftModel
 from transformers import (
     AutoModelForCausalLM,
@@ -28,8 +26,15 @@ from transformers import (
     BitsAndBytesConfig,
 )
 
+from src.training_utils import (
+    load_dev_data,
+    render_prompt_text,
+    classify_json_errors,
+)
+from src.eval import parse_json_object
 
-def load_model_for_eval(model_name: str):
+
+def load_model_for_eval(model_name: str, device: str = "cuda:0"):
     """Load model in 4-bit NF4 for inference (no kbit training prep)."""
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
@@ -49,7 +54,7 @@ def load_model_for_eval(model_name: str):
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
         quantization_config=bnb_config,
-        device_map="cuda:0",
+        device_map=device,
         torch_dtype=torch.bfloat16,
         trust_remote_code=True,
     )
@@ -59,27 +64,42 @@ def load_model_for_eval(model_name: str):
 
 
 def main():
-    # Unbuffered output so remote_run.py can stream progress
+    parser = argparse.ArgumentParser(description="Evaluate a QLoRA checkpoint")
+    parser.add_argument("--base-model", default="Qwen/Qwen3-8B",
+                        help="HuggingFace model ID")
+    parser.add_argument("--checkpoint", required=True,
+                        help="Path to LoRA adapter directory")
+    parser.add_argument("--eval-data",
+                        default="data/splits/eval50.json",
+                        help="Path to eval JSON")
+    parser.add_argument("--output", required=True,
+                        help="Path to save eval result JSON")
+    parser.add_argument("--device", default="cuda:0",
+                        help="Device for model loading")
+    parser.add_argument("--max-new-tokens", type=int, default=1024)
+    args = parser.parse_args()
+
     sys.stdout.reconfigure(line_buffering=True)
 
-    # ---- Config ----
-    base_model_name = "Qwen/Qwen3-8B"
+    # Resolve relative paths against project root
     project_root = Path(__file__).resolve().parents[2]
-    adapter_path = str(project_root / "checkpoints" / "BC8-final" / "adapter")
-    eval_data_path = str(project_root / "data" / "splits" / "eval50.json")
-    output_path = str(project_root / "checkpoints" / "BC8-final" / "eval_result.json")
-    max_new_tokens = 1024
 
     # ---- Load model ----
     print("Loading base model (4-bit quantized) ...", flush=True)
-    model, tokenizer = load_model_for_eval(base_model_name)
+    model, tokenizer = load_model_for_eval(args.base_model, args.device)
 
-    print(f"Loading LoRA adapter from {adapter_path} ...", flush=True)
-    model = PeftModel.from_pretrained(model, adapter_path)
+    checkpoint_path = str(project_root / args.checkpoint
+                          if not Path(args.checkpoint).is_absolute()
+                          else args.checkpoint)
+    print(f"Loading LoRA adapter from {checkpoint_path} ...", flush=True)
+    model = PeftModel.from_pretrained(model, checkpoint_path)
     model.eval()
     model.config.use_cache = True
 
     # ---- Load dev data ----
+    eval_data_path = str(project_root / args.eval_data
+                         if not Path(args.eval_data).is_absolute()
+                         else args.eval_data)
     print(f"Loading eval data from {eval_data_path} ...", flush=True)
     dev_tasks = load_dev_data(eval_data_path)
     print(f"  {len(dev_tasks)} samples loaded", flush=True)
@@ -106,7 +126,7 @@ def main():
         with torch.no_grad():
             outputs = model.generate(
                 **inputs,
-                max_new_tokens=max_new_tokens,
+                max_new_tokens=args.max_new_tokens,
                 temperature=0.0,
                 do_sample=False,
                 pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
@@ -139,6 +159,9 @@ def main():
     }
 
     # ---- Save ----
+    output_path = str(project_root / args.output
+                      if not Path(args.output).is_absolute()
+                      else args.output)
     out_path = Path(output_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(

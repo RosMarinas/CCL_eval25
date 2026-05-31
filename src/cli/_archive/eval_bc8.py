@@ -13,9 +13,7 @@ from pathlib import Path
 
 import torch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-
-from src.cli.train_b8 import (
+from src.training_utils import (
     load_dev_data,
     render_prompt_text,
     classify_json_errors,

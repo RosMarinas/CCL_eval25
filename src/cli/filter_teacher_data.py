@@ -28,6 +28,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from src.schema import unique_preserve_order
+
 
 # ============================================================
 # Controlled vocabulary (docs/contracts/data-schema.md Section 3.2)
@@ -117,15 +119,8 @@ def count_cjk(text: str) -> int:
     return sum(1 for c in text if "一" <= c <= "鿿")
 
 
-def unique_preserve_order(items: list[str]) -> list[str]:
-    """Deduplicate items preserving order."""
-    seen: set[str] = set()
-    result: list[str] = []
-    for item in items:
-        if item not in seen:
-            seen.add(item)
-            result.append(item)
-    return result
+
+
 
 
 def has_markdown_code_blocks(text: str) -> bool:

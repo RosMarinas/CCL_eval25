@@ -23,8 +23,11 @@ from typing import Any, Callable
 import torch
 from peft import PeftModel
 
-from src.cli.train_b8 import load_dev_data, load_quantized_model
-from src.cli.train_bc8 import render_evidence_draft_text
+from src.training_utils import (
+    load_dev_data,
+    load_quantized_model,
+    render_evidence_draft_text,
+)
 from src.eval import (
     CORE_JSON_ERRORS,
     HARD_JSON_ERRORS,
