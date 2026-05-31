@@ -3,16 +3,16 @@
 import json
 import tempfile
 from pathlib import Path
-from src.cli.filter_teacher_data import (
+from src.data.filter import (
     TeacherDataFilter,
     count_cjk,
-    unique_preserve_order,
     CONTROLLED_VOCABULARY,
     FORBIDDEN_COT_FIELDS,
     has_markdown_code_blocks,
     has_prompt_residue,
     extract_teacher_content_fields,
 )
+from src.schema import unique_preserve_order
 
 
 def make_valid_base():
