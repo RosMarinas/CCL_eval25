@@ -28,46 +28,115 @@ logger = logging.getLogger(__name__)
 # Shared constants
 # ---------------------------------------------------------------------------
 
-ZERO_SHOT_PROMPT = """你需要完成古诗词理解任务。请根据输入诗歌、目标词语、目标句子和情感选项，直接生成最终答案 JSON。
+ZERO_SHOT_PROMPT = """你是一名经验丰富古诗词理解评测教授。请根据输入诗歌、目标词语、目标句子和情感选项，生成可直接评测的最终答案 JSON。
+
+请在内部完成：
+
+1. 解释 qa_words 中每个词语在诗中的含义。
+2. 翻译 qa_sents 中每个句子为现代汉语。
+3. 从 choose 中选择最符合全诗主要情感的选项 ID。
 
 输出要求：
-- 只输出一个合法 JSON 对象。
-- 不要输出 Markdown 代码块。
-- 不要输出解释、分析、证据、草稿或任何 JSON 之外的文字。
-- JSON 字段必须且只能包含：idx、ans_qa_words、ans_qa_sents、choose_id。
-- idx 必须与输入 idx 完全一致。
-- ans_qa_words 是对象，key 必须逐字复制输入数组中的原始字符串，使用 qa_words 中的原词；包括标点、空格和全半角字符，不能删改句末标点；重复词语只输出一个 key；value 是该词在诗中的简洁解释。
-- ans_qa_sents 是对象，key 必须逐字复制输入数组中的原始字符串，使用 qa_sents 中的原句；包括标点、空格和全半角字符，不能删改句末标点；重复句子只输出一个 key；value 是该句的简洁现代汉语翻译。
-- choose_id 必须从 choose 的选项 ID 中选择一个最符合全诗情感的选项。
+
+* 只输出一个合法 JSON 对象，不要 Markdown，不要解释，不要 JSON 之外的文字。
+* JSON 字段必须且只能包含：idx、ans_qa_words、ans_qa_sents、choose_id。
+* idx 必须与输入 idx 完全一致。
+* ans_qa_words 是对象：key 必须逐字复制 qa_words 中的原词；value 是简洁词义。
+* ans_qa_sents 是对象：key 必须逐字复制 qa_sents 中的原句；value 是简洁现代汉语翻译。
+* choose_id 必须是 choose 中已有的选项 ID，只输出选项字母。
+* 所有字段都必须存在，不能为 null，不能输出空字符串。
+* 若不确定，给出最可能答案，不要留空。
 
 输入：
 {input_json}
 
 现在只输出最终 JSON："""
 
-EVIDENCE_DRAFT_PROMPT = """你需要完成古诗词理解任务。请根据输入诗歌、目标词语、目标句子和情感选项，生成分析证据、情感分析和草稿答案。
+EVIDENCE_DRAFT_PROMPT = """你是一名经验丰富古诗词理解评测教授。请根据输入诗歌、目标词语、目标句子和情感选项，生成结构化证据、情感判断和草稿答案。
 
 输出要求：
-- 只输出一个合法 JSON 对象，包含 evidence、sentiment 和 draft_answer 三个字段。
-- evidence 包含 words（词语解释对象）、sentences（句子翻译对象）和 emotion（情感分析列表）三个子字段。
-- sentiment 包含 primary（主要情感标签，必须使用受控词汇表中的标签）、secondary（次要情感标签列表）和 rationale（简短理由，不超过80字）。
-- draft_answer 包含 ans_qa_words 和 ans_qa_sents，不包含 choose_id。
-- 不要输出 Markdown 代码块或任何额外文字。
+
+* 只输出一个合法 JSON 对象，不要 Markdown，不要 JSON 之外的文字。
+* 顶层字段必须且只能包含：evidence、sentiment、draft_answer。
+* qa_words 和 qa_sents 相关对象的 key 必须逐字复制输入中的原词和原句。
+* 所有字段都必须存在，不能为 null。
+
+JSON 结构：
+{
+"evidence": {
+"words": {"原词": "简洁词义"},
+"sentences": {"原句": "现代汉语翻译"},
+"emotion": ["简短情感证据"]
+},
+"sentiment": {
+"primary": "主要情感标签",
+"secondary": ["次要情感标签"],
+"rationale": "不超过80字的理由"
+},
+"draft_answer": {
+"ans_qa_words": {"原词": "简洁词义"},
+"ans_qa_sents": {"原句": "现代汉语翻译"}
+}
+}
+
+primary 必须从以下标签中选择一个：
+惜别感伤、送别不舍、离别愁绪、思乡怀远、羁旅思归、故园之思、
+忧国伤时、报国壮志、兴亡之叹、山水闲适、田园之乐、隐逸情怀、
+怀古伤今、历史沧桑、昔盛今衰、相思闺怨、爱情甜蜜、相思之苦、
+人生无常、时光易逝、仕途失意、边塞征战、将士艰辛、厌战思归、其他
 
 输入：
 {input_json}
 
 现在输出 evidence、sentiment 和 draft_answer："""
 
-CRITIQUE_CORRECTION_PROMPT = """你需要对古诗词理解答案进行评审和修正。请根据输入诗歌、目标词语、目标句子、情感选项以及一个候选错误答案，生成评审意见和修正后的答案。
+CRITIQUE_CORRECTION_PROMPT = """你是一名经验丰富古诗词理解评测教授。请根据输入诗歌、目标词语、目标句子、情感选项和候选答案，评审候选答案并生成修正后的最终答案。
+
+评审原则：
+
+* 候选答案语义正确但表达不同，不要误判为错。
+* 只有明显误解词义、句意或全诗情感时才修正。
+* 不确定时尽量保留候选答案中合理的部分。
+* 若候选答案格式错误、缺字段或 key 未精确复制输入，必须修正。
 
 输出要求：
-- 只输出一个合法 JSON 对象，包含 critique、correction_evidence 和 corrected_answer 三个字段。
-- critique 包含 word_errors（词义错误列表）、sentence_errors（句译错误列表）和 emotion_error（情感分析错误对象）。
-- emotion_error 包含 issue（问题描述）、expected_primary（正确情感标签）和 rationale_mismatch（理由）。
-- correction_evidence 包含修正后的 words（词语解释）、sentences（句子翻译）和 emotion（情感分析）。
-- corrected_answer 是可直接评测的最终答案，必须包含 idx、ans_qa_words、ans_qa_sents 和 choose_id。
-- 不要输出 Markdown 代码块或任何额外文字。
+
+* 只输出一个合法 JSON 对象，不要 Markdown，不要 JSON 之外的文字。
+* 顶层字段必须且只能包含：critique、correction_evidence、corrected_answer。
+* 所有字段都必须存在，不能为 null。
+* corrected_answer 必须可直接评测，且字段必须且只能包含：idx、ans_qa_words、ans_qa_sents、choose_id。
+* idx 必须与输入 idx 完全一致。
+* ans_qa_words 的 key 必须逐字复制 qa_words 中的原词。
+* ans_qa_sents 的 key 必须逐字复制 qa_sents 中的原句。
+* choose_id 必须来自输入 choose 的选项 ID。
+
+JSON 结构：
+{
+"critique": {
+"word_errors": [],
+"sentence_errors": [],
+"emotion_error": {
+"issue": "问题描述或无明显错误",
+"expected_primary": "正确或最接近的主要情感",
+"rationale_mismatch": "不匹配原因或无明显不匹配"
+}
+},
+"correction_evidence": {
+"words": {"原词": "修正后词义"},
+"sentences": {"原句": "修正后译文"},
+"emotion": {
+"primary": "主要情感",
+"rationale": "简短理由",
+"selected_choose_id": "选项ID"
+}
+},
+"corrected_answer": {
+"idx": 输入idx,
+"ans_qa_words": {"原词": "最终词义"},
+"ans_qa_sents": {"原句": "最终译文"},
+"choose_id": "选项ID"
+}
+}
 
 输入：
 {input_json}
@@ -76,6 +145,7 @@ CRITIQUE_CORRECTION_PROMPT = """你需要对古诗词理解答案进行评审和
 {candidate_json}
 
 现在输出评审和修正 JSON："""
+
 
 TOP_FIELDS = frozenset({"idx", "ans_qa_words", "ans_qa_sents", "choose_id"})
 
