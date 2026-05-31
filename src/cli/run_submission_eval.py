@@ -46,7 +46,7 @@ from typing import Any
 import torch
 from peft import PeftModel
 
-from src.training import load_dev_data
+from src.training import load_dev_data, render_prompt_text
 from src.inference import load_model
 from src.eval import (
     CORE_JSON_ERRORS,
@@ -66,34 +66,6 @@ from src.harness import (
 )
 
 logger = logging.getLogger(__name__)
-
-ZERO_SHOT_PROMPT = """你需要完成古诗词理解任务。请根据输入诗歌、目标词语、目标句子和情感选项，直接生成最终答案 JSON。
-
-输出要求：
-- 只输出一个合法 JSON 对象。
-- 不要输出 Markdown 代码块。
-- 不要输出解释、分析、证据、草稿或任何 JSON 之外的文字。
-- JSON 字段必须且只能包含：idx、ans_qa_words、ans_qa_sents、choose_id。
-- idx 必须与输入 idx 完全一致。
-- ans_qa_words 是对象，key 必须逐字复制输入数组中的原始字符串，使用 qa_words 中的原词；包括标点、空格和全半角字符，不能删改句末标点；重复词语只输出一个 key；value 是该词在诗中的简洁解释。
-- ans_qa_sents 是对象，key 必须逐字复制输入数组中的原始字符串，使用 qa_sents 中的原句；包括标点、空格和全半角字符，不能删改句末标点；重复句子只输出一个 key；value 是该句的简洁现代汉语翻译。
-- choose_id 必须从 choose 的选项 ID 中选择一个最符合全诗情感的选项。
-
-输入：
-{input_json}
-
-现在只输出最终 JSON："""
-
-
-def render_prompt_text(task_json: dict[str, Any]) -> str:
-    """Fill the zero-shot prompt template with the task JSON."""
-    return ZERO_SHOT_PROMPT.format(
-        input_json=json.dumps(task_json, ensure_ascii=False)
-    )
-
-
-
-
 
 
 # ---------------------------------------------------------------------------

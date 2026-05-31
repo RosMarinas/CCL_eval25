@@ -46,104 +46,18 @@ from transformers import (
     TrainingArguments,
 )
 
+from src.training import (
+    ZERO_SHOT_PROMPT, EVIDENCE_DRAFT_PROMPT, CRITIQUE_CORRECTION_PROMPT,
+    TOP_FIELDS, load_train_source, load_dev_data, build_task_json,
+    render_prompt_text, render_evidence_draft_text,
+    render_critique_correction_text, render_prompt_for_target,
+)
+from src.schema import unique_preserve_order
 from src.eval import parse_json_object
 
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-# ---------------------------------------------------------------------------
-# Prompt templates (one per target type)
-# ---------------------------------------------------------------------------
-
-ZERO_SHOT_PROMPT = """你需要完成古诗词理解任务。请根据输入诗歌、目标词语、目标句子和情感选项，直接生成最终答案 JSON。
-
-输出要求：
-- 只输出一个合法 JSON 对象。
-- 不要输出 Markdown 代码块。
-- 不要输出解释、分析、证据、草稿或任何 JSON 之外的文字。
-- JSON 字段必须且只能包含：idx、ans_qa_words、ans_qa_sents、choose_id。
-- idx 必须与输入 idx 完全一致。
-- ans_qa_words 是对象，key 必须逐字复制输入数组中的原始字符串，使用 qa_words 中的原词；包括标点、空格和全半角字符，不能删改句末标点；重复词语只输出一个 key；value 是该词在诗中的简洁解释。
-- ans_qa_sents 是对象，key 必须逐字复制输入数组中的原始字符串，使用 qa_sents 中的原句；包括标点、空格和全半角字符，不能删改句末标点；重复句子只输出一个 key；value 是该句的简洁现代汉语翻译。
-- choose_id 必须从 choose 的选项 ID 中选择一个最符合全诗情感的选项。
-
-输入：
-{input_json}
-
-现在只输出最终 JSON："""
-
-EVIDENCE_DRAFT_PROMPT = """你需要完成古诗词理解任务。请根据输入诗歌、目标词语、目标句子和情感选项，生成分析证据、情感分析和草稿答案。
-
-输出要求：
-- 只输出一个合法 JSON 对象，包含 evidence、sentiment 和 draft_answer 三个字段。
-- evidence 包含 words（词语解释对象）、sentences（句子翻译对象）和 emotion（情感分析列表）三个子字段。
-- sentiment 包含 primary（主要情感标签，必须使用受控词汇表中的标签）、secondary（次要情感标签列表）和 rationale（简短理由，不超过80字）。
-- draft_answer 包含 ans_qa_words 和 ans_qa_sents，不包含 choose_id。
-- 不要输出 Markdown 代码块或任何额外文字。
-
-输入：
-{input_json}
-
-现在输出 evidence、sentiment 和 draft_answer："""
-
-CRITIQUE_CORRECTION_PROMPT = """你需要对古诗词理解答案进行评审和修正。请根据输入诗歌、目标词语、目标句子、情感选项以及一个候选错误答案，生成评审意见和修正后的答案。
-
-输出要求：
-- 只输出一个合法 JSON 对象，包含 critique、correction_evidence 和 corrected_answer 三个字段。
-- critique 包含 word_errors（词义错误列表）、sentence_errors（句译错误列表）和 emotion_error（情感分析错误对象）。
-- emotion_error 包含 issue（问题描述）、expected_primary（正确情感标签）和 rationale_mismatch（理由）。
-- correction_evidence 包含修正后的 words（词语解释）、sentences（句子翻译）和 emotion（情感分析）。
-- corrected_answer 是可直接评测的最终答案，必须包含 idx、ans_qa_words、ans_qa_sents 和 choose_id。
-- 不要输出 Markdown 代码块或任何额外文字。
-
-输入：
-{input_json}
-
-候选答案：
-{candidate_json}
-
-现在输出评审和修正 JSON："""
-
-# Schema: the only permitted top-level keys in the final JSON
-TOP_FIELDS = frozenset({"idx", "ans_qa_words", "ans_qa_sents", "choose_id"})
-
-# ---------------------------------------------------------------------------
-# Source data loading (for reconstructing tasks from final_json records)
-# ---------------------------------------------------------------------------
-
-
-def load_train_source(source_dir: str | Path) -> dict[int, dict[str, Any]]:
-    """Load original training data from the train-data/ directory tree.
-
-    Each JSON file is an array of items with keys: title, content, keywords,
-    trans, emotion.  Sequential idx is assigned in file-sorted order.
-
-    Returns a dict mapping idx -> {title, content}.
-    """
-    source_dir = Path(source_dir)
-    samples: list[dict[str, Any]] = []
-    idx = 0
-    for json_path in sorted(source_dir.rglob("*.json")):
-        try:
-            data = json.loads(json_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            continue
-        if not isinstance(data, list):
-            continue
-        for item in data:
-            if not isinstance(item, dict):
-                continue
-            samples.append({
-                "idx": idx,
-                "title": (item.get("title") or ""),
-                "content": (item.get("content") or ""),
-            })
-            idx += 1
-
-    logger.info("Loaded %d source samples from %s", len(samples), source_dir)
-    return {s["idx"]: s for s in samples}
-
 
 # ---------------------------------------------------------------------------
 # BC8 data loading
@@ -174,97 +88,8 @@ def report_target_distribution(records: list[dict[str, Any]]) -> None:
         logger.info("  %s: %d (%.1f%%)", target, count, pct)
 
 
-def load_dev_data(path: str | Path) -> list[dict[str, Any]]:
-    """Load dev split data (eval50.json), an array of task JSON objects."""
-    path = Path(path)
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    if not isinstance(data, list):
-        raise ValueError(f"Expected JSON array in {path}, got {type(data).__name__}")
-    logger.info("Loaded %d dev samples from %s", len(data), path)
-    return data
 
 
-# ---------------------------------------------------------------------------
-# Task construction and rendering
-# ---------------------------------------------------------------------------
-
-
-def build_task_json(
-    idx: int,
-    title: str = "",
-    author: str = "",
-    content: str = "",
-    qa_words: list[str] | None = None,
-    qa_sents: list[str] | None = None,
-    choose: dict[str, str] | None = None,
-) -> dict[str, Any]:
-    """Build the unified input task JSON per docs/contracts/data-schema.md Section 1."""
-    return {
-        "idx": idx,
-        "title": title,
-        "author": author,
-        "content": content,
-        "qa_words": qa_words or [],
-        "qa_sents": qa_sents or [],
-        "choose": choose or {},
-    }
-
-
-def render_prompt_text(task_json: dict[str, Any]) -> str:
-    """Fill the zero-shot prompt template with the task JSON."""
-    return ZERO_SHOT_PROMPT.format(
-        input_json=json.dumps(task_json, ensure_ascii=False)
-    )
-
-
-def render_evidence_draft_text(task_json: dict[str, Any]) -> str:
-    """Fill the evidence-draft prompt template with the task JSON."""
-    return EVIDENCE_DRAFT_PROMPT.format(
-        input_json=json.dumps(task_json, ensure_ascii=False)
-    )
-
-
-def render_critique_correction_text(
-    task_json: dict[str, Any],
-    candidate_json: dict[str, Any] | str,
-) -> str:
-    """Fill the critique-correction prompt template with task and candidate."""
-    if isinstance(candidate_json, dict):
-        candidate_str = json.dumps(candidate_json, ensure_ascii=False)
-    else:
-        candidate_str = str(candidate_json)
-    return CRITIQUE_CORRECTION_PROMPT.format(
-        input_json=json.dumps(task_json, ensure_ascii=False),
-        candidate_json=candidate_str,
-    )
-
-
-def render_prompt_for_target(
-    task_json: dict[str, Any],
-    target: str,
-    candidate: dict[str, Any] | None = None,
-) -> str:
-    """Render the appropriate prompt for the given target type."""
-    if target == "final_json":
-        return render_prompt_text(task_json)
-    elif target == "evidence_draft":
-        return render_evidence_draft_text(task_json)
-    elif target == "critique_correction":
-        return render_critique_correction_text(task_json, candidate or {})
-    else:
-        raise ValueError(f"Unknown target: {target}")
-
-
-def unique_preserve_order(items: list[str]) -> list[str]:
-    """Deduplicate a list preserving order."""
-    seen: set[str] = set()
-    out: list[str] = []
-    for item in items:
-        if item not in seen:
-            seen.add(item)
-            out.append(item)
-    return out
 
 
 def extract_task_and_output(

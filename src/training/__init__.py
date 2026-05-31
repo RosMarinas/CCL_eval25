@@ -59,6 +59,24 @@ EVIDENCE_DRAFT_PROMPT = """你需要完成古诗词理解任务。请根据输�
 
 现在输出 evidence、sentiment 和 draft_answer："""
 
+CRITIQUE_CORRECTION_PROMPT = """你需要对古诗词理解答案进行评审和修正。请根据输入诗歌、目标词语、目标句子、情感选项以及一个候选错误答案，生成评审意见和修正后的答案。
+
+输出要求：
+- 只输出一个合法 JSON 对象，包含 critique、correction_evidence 和 corrected_answer 三个字段。
+- critique 包含 word_errors（词义错误列表）、sentence_errors（句译错误列表）和 emotion_error（情感分析错误对象）。
+- emotion_error 包含 issue（问题描述）、expected_primary（正确情感标签）和 rationale_mismatch（理由）。
+- correction_evidence 包含修正后的 words（词语解释）、sentences（句子翻译）和 emotion（情感分析）。
+- corrected_answer 是可直接评测的最终答案，必须包含 idx、ans_qa_words、ans_qa_sents 和 choose_id。
+- 不要输出 Markdown 代码块或任何额外文字。
+
+输入：
+{input_json}
+
+候选答案：
+{candidate_json}
+
+现在输出评审和修正 JSON："""
+
 TOP_FIELDS = frozenset({"idx", "ans_qa_words", "ans_qa_sents", "choose_id"})
 
 # ---------------------------------------------------------------------------
@@ -167,6 +185,37 @@ def render_evidence_draft_text(task_json: dict[str, Any]) -> str:
     return EVIDENCE_DRAFT_PROMPT.format(
         input_json=json.dumps(task_json, ensure_ascii=False)
     )
+
+
+def render_critique_correction_text(
+    task_json: dict[str, Any],
+    candidate_json: dict[str, Any] | str,
+) -> str:
+    """Fill the critique-correction prompt template with task and candidate."""
+    if isinstance(candidate_json, dict):
+        candidate_str = json.dumps(candidate_json, ensure_ascii=False)
+    else:
+        candidate_str = str(candidate_json)
+    return CRITIQUE_CORRECTION_PROMPT.format(
+        input_json=json.dumps(task_json, ensure_ascii=False),
+        candidate_json=candidate_str,
+    )
+
+
+def render_prompt_for_target(
+    task_json: dict[str, Any],
+    target: str,
+    candidate: dict[str, Any] | None = None,
+) -> str:
+    """Render the appropriate prompt for the given target type."""
+    if target == "final_json":
+        return render_prompt_text(task_json)
+    elif target == "evidence_draft":
+        return render_evidence_draft_text(task_json)
+    elif target == "critique_correction":
+        return render_critique_correction_text(task_json, candidate or {})
+    else:
+        raise ValueError(f"Unknown target: {target}")
 
 
 def format_user_prompt(task: dict[str, Any]) -> str:
