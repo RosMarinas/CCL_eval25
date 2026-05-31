@@ -1,6 +1,6 @@
 # BCD 循环 Block 消融方案
 
-本文定义 `BCD0`、`BCD1`、`BCD2` 与 `BCD-H` 的最小可执行设计。BCD 是后续结构消融，不是主路线；只有 `BC8-final`、`H1/H2` harness 结果和 `docs/contracts/eval-plan.md` 的评测协议稳定后才启动。
+本文定义 `BCD0`、`BCD1`、`BCD2` 与 `BCD-H` 的最小可执行设计。BCD 是后续结构消融，不是主路线；只有 `BC8-final`、`H1/H2` harness 结果和 `docs/contract/eval-plan.md` 的评测协议稳定后才启动。
 
 本文只做设计，不写训练代码、不引入新依赖、不修改 harness。若未来实现需要大规模改推理框架、vLLM 适配或多轮 agent，直接放弃 BCD，优先提交 `BC8-final`、`BC8-final + 规则 postprocess` 或 `BC8-final + harness`。
 
@@ -66,7 +66,7 @@ front_blocks -> middle_blocks -> middle_blocks -> back_blocks
 
 ## 4. BCD1：循环结构 + 继续 QLoRA
 
-`BCD1` 是主结构消融，实验命名沿用 `plan.md` / `docs/contracts/eval-plan.md` 的 `BCD1`。
+`BCD1` 是主结构消融，实验命名沿用 `plan.md` / `docs/contract/eval-plan.md` 的 `BCD1`。
 
 做法：
 
@@ -162,7 +162,7 @@ BCD 的核心对照不是 prompt baseline，而是主路线最终候选：
 
 ## 9. 记录字段
 
-BCD 实验记录复用 `docs/contracts/eval-plan.md` 字段，并补充：
+BCD 实验记录复用 `docs/contract/eval-plan.md` 字段，并补充：
 
 | 字段 | 说明 |
 | --- | --- |

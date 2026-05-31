@@ -7,8 +7,8 @@
 本次检查只读查看了以下资料：
 
 - `AGENTS.md`
-- `docs/contracts/data-schema.md`
-- `docs/contracts/teacher-data.md`
+- `docs/spec/data-schema.md`
+- `docs/contract/teacher-data.md`
 - `docs/plans/training-plan.md`
 - `data/eval_data.json`
 - `data/train-data` 下 8 个 `train.json`
@@ -146,8 +146,8 @@
 
 ```bash
 sed -n '1,240p' AGENTS.md
-sed -n '1,260p' docs/contracts/data-schema.md
-sed -n '1,560p' docs/contracts/teacher-data.md
+sed -n '1,260p' docs/spec/data-schema.md
+sed -n '1,560p' docs/contract/teacher-data.md
 sed -n '1,280p' docs/plans/training-plan.md
 sed -n '1,220p' data/eval_data.json
 find data/train-data -name train.json -print

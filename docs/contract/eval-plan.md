@@ -4,7 +4,7 @@
 
 ## 1. 评测原则
 
-- 输入和输出 schema 以 `docs/contracts/data-schema.md` 为准，最终输出只评测 `idx`、`ans_qa_words`、`ans_qa_sents`、`choose_id`。
+- 输入和输出 schema 以 `docs/spec/data-schema.md` 为准，最终输出只评测 `idx`、`ans_qa_words`、`ans_qa_sents`、`choose_id`。
 - 评分规则延续已确认策略：优先使用官方评测脚本。官方脚本缺失时，内部临时总分按官方 Task1:Task2 = 0.5:0.5 权重计算：`0.25 * 词义分 + 0.25 * 翻译分 + 0.50 * 情感分`。Task1 内部词义与翻译等权分割为暂定假设，待官方评测脚本发布后以官方为准。
 - 情感分采用两阶段分解评估：(a) **Reasoner 情感分析准确率**——`sentiment.primary` 是否正确反映诗歌情感；(b) **Formatter 情感映射准确率**——sentiment→choose_id 映射是否正确。仅映射准确率（即 choose_id 准确性）计入最终提交得分；Reasoner 情感分析准确率用于诊断和消融分析，不计入提交总分。
 - JSON 错误率、formatter 改坏率和平均延迟独立记录，不并入内部临时总分。
@@ -80,7 +80,7 @@ JSON 错误分为两类，一个样本可同时有 core 和 format 错误。
 | `empty_required_answer` | 目标词或目标句答案为空字符串、`null` 或空对象。 |
 | `invalid_choose_id` | 最终输出 `choose_id` 不属于原题 `choose` 的选项 ID（仅校验 final 输出，Reasoner 中间输出不含 choose_id）。 |
 | `missing_sentiment` | Reasoner 中间输出缺少 `sentiment` 字段（仅 Reasoner 输出校验）。 |
-| `invalid_sentiment_primary` | Reasoner `sentiment.primary` 不在受控词汇表中（参见 docs/contracts/data-schema.md 第 3.2 节；仅 Reasoner 输出校验）。 |
+| `invalid_sentiment_primary` | Reasoner `sentiment.primary` 不在受控词汇表中（参见 docs/spec/data-schema.md 第 3.2 节；仅 Reasoner 输出校验）。 |
 | `non_chinese_or_unusable` | 答案主体不是中文，或明显不可用于提交。 |
 
 ### Format 错误（输出不干净）
@@ -179,7 +179,7 @@ Formatter 改坏率只在 FMT、H2、H3、H4、BCD-H 等存在 formatter 的实�
 新增两阶段情感错误类型说明：
 - `sentiment_misanalysis`：Reasoner 情感分析本身错误，`sentiment.primary` 标签不匹配诗歌实际情感。
 - `sentiment_mapping_error`：Reasoner 情感分析正确但 Formatter 将其映射到错误选项（映射回归）。
-- `sentiment_vocab_mismatch`：`sentiment.primary` 不在受控词汇表中（参见 docs/contracts/data-schema.md 第 3.2 节）。
+- `sentiment_vocab_mismatch`：`sentiment.primary` 不在受控词汇表中（参见 docs/spec/data-schema.md 第 3.2 节）。
 
 ### 5.4 JSON / Harness 错误分析
 

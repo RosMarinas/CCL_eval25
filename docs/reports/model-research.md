@@ -2,7 +2,7 @@
 
 调研日期：2026-05-20
 
-本文只服务第一轮 `P14 / P14-fast / P8 / FMT` baseline 选型。约束来自 `plan.md`、`docs/plans/agent-task-list.md`、`docs/contracts/prompt-baseline.md`、`docs/contracts/eval-plan.md`：
+本文只服务第一轮 `P14 / P14-fast / P8 / FMT` baseline 选型。约束来自 `plan.md`、`docs/plans/agent-task-list.md`、`docs/contract/prompt-baseline.md`、`docs/contract/eval-plan.md`：
 
 - 最终推理系统参与模型总参数量必须小于 20B。
 - 第一轮不包含 Qwen3.5-9B；若提及，仅作为暂缓/备选。

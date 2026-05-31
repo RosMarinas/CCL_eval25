@@ -148,7 +148,7 @@ python3 remote_run.py python src/cli/filter_teacher_data.py \
 - `sentiment.primary` 100% 在受控词汇表中
 - `ans_qa_words` key 覆盖 100% 目标词
 - `ans_qa_sents` key 覆盖 100% 目标句
-- 人工抽查 5-10% 样本（按 `docs/contracts/teacher-data.md` 第 6 节 checklist）
+- 人工抽查 5-10% 样本（按 `docs/contract/teacher-data.md` 第 6 节 checklist）
 
 ## Phase 3: 训练数据组装
 
@@ -404,7 +404,7 @@ python3 remote_run.py python src/run_final_eval.py \
 
 ### Step 8.2: 生成最终选择记录
 
-按 `docs/contracts/eval-plan.md` 第 8 节格式填写最终选择摘要。
+按 `docs/contract/eval-plan.md` 第 8 节格式填写最终选择摘要。
 
 ## Phase 9: BCD 消融（条件执行）
 
@@ -435,6 +435,7 @@ python3 remote_run.py python src/run_final_eval.py \
 | `src/cli/build_fewshot_pool.py` | 1 | 构造 few-shot 样例池（计划中，当前仓库未实现） |
 | `src/cli/generate_teacher_data.py` | 2 | Teacher 数据生成（DeepSeek API） |
 | `src/cli/extract_errors.py` | 2 | 从 baseline 提取错误样本（计划中，当前仓库未实现） |
+| `src/cli/generate_candidates.py` | 2 | 使用合成扰动生成候选错误样本 |
 | `src/cli/filter_teacher_data.py` | 2 | Teacher 数据自动过滤 |
 | `src/cli/build_training_data.py` | 3 | 训练数据集组装 |
 | `src/cli/train_b8.py` | 5 | B8 answer-only QLoRA |
@@ -442,6 +443,7 @@ python3 remote_run.py python src/run_final_eval.py \
 | `src/cli/train_replay.py` | 6 | BC8-final answer-only replay |
 | `src/cli/run_baseline_matrix.py` | 4 | Prompt baseline 评测 |
 | `src/cli/run_harness.py` | 7 | True harness 推理 |
-| `src/run_final_eval.py` | 8 | 最终评测 |
+| `src/cli/run_submission_eval.py` | 8 | 最终评测 (Submission Runner) |
+| `src/cli/generate_submit.py` | 8 | 生成最终提交数据格式 |
 
 所有脚本均通过 `python3 remote_run.py` 在服务器上执行。

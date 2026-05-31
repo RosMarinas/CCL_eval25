@@ -11,8 +11,8 @@
 
 依赖：
 
-- 统一输入和最终输出 schema：`docs/contracts/data-schema.md`
-- harness 输入输出与 validator 规则：`docs/contracts/harness.md`
+- 统一输入和最终输出 schema：`docs/spec/data-schema.md`
+- harness 输入输出与 validator 规则：`docs/spec/harness.md`
 - 模型候选、license、参数量和部署支持：`docs/reports/model-research.md`
 
 本文只定义实验协议和 prompt 模板。具体模型名称由模型调研确定；第一轮不使用 Qwen3.5-9B 作为 P8 主候选。

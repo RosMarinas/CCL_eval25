@@ -4,7 +4,7 @@
 
 ## 1. 输入与输出
 
-本文使用 `docs/contracts/data-schema.md` 中的统一输入 schema：
+本文使用 `docs/spec/data-schema.md` 中的统一输入 schema：
 
 ```json
 {
@@ -27,7 +27,7 @@
 
 ### 1.1 训练集样本输出（仅情感分析，无 `choose_id`）
 
-训练集（`train-data/` 的 164 首诗）原本没有 `choose` 选项，Teacher 只生成情感分析（`sentiment`）和词义/句译，**不生成 `choose_id`**。输出匹配 Reasoner 中间输出 schema（见 `docs/contracts/data-schema.md` §3）：
+训练集（`train-data/` 的 164 首诗）原本没有 `choose` 选项，Teacher 只生成情感分析（`sentiment`）和词义/句译，**不生成 `choose_id`**。输出匹配 Reasoner 中间输出 schema（见 `docs/spec/data-schema.md` §3）：
 
 ```json
 {
@@ -533,7 +533,7 @@ python3 remote_run.py python src/cli/generate_teacher_data.py
 - 对于训练集样本（`choose` 为空），`draft_answer` **不应**包含 `choose_id` 字段。若出现该字段，直接过滤。
 - 对于评测 dev split 样本（`choose` 非空），若输出包含 `final_answer` 且其中有 `choose_id`，`choose_id` 必须属于 `choose` 的现有选项 ID（标准样本应为 `A/B/C/D`）。
 - `teacher_critique` 中 `corrected_answer` 不包含 `choose_id`（修正目标为词义和句译）。
-- `sentiment.primary` 必须存在于受控词汇表中（见 `docs/contracts/data-schema.md` §3.2）。若非受控词汇表中的标签，直接过滤。
+- `sentiment.primary` 必须存在于受控词汇表中（见 `docs/spec/data-schema.md` §3.2）。若非受控词汇表中的标签，直接过滤。
 - `sentiment.secondary` 中的每个标签也必须存在于受控词汇表中。若有标签不在表中，触发 `not_in_vocab` 标记，进入人工复核。
 
 ### 6.3 长度与风格
@@ -578,7 +578,7 @@ python3 remote_run.py python src/cli/generate_teacher_data.py
 - 句子翻译是否保留主要意象、动作、情感和否定关系。
 - 翻译是否是现代汉语解释，而不是泛泛赏析。
 - `sentiment.primary` 是否正确反映诗歌的主导情感。
-- `sentiment.primary` 标签是否来自受控词汇表（见 `docs/contracts/data-schema.md` §3.2）。
+- `sentiment.primary` 标签是否来自受控词汇表（见 `docs/spec/data-schema.md` §3.2）。
 - `sentiment.secondary` 是否捕捉了情感细微差别，且不与 `primary` 矛盾（如 primary 为"惜别感伤"但 secondary 含"爱情甜蜜"则矛盾）。
 - `sentiment.rationale` 是否提供有效、诗作特有的证据（引用诗中具体词语或意象），而非通用描述。
 - 情感短证据（`evidence.emotion`）是否能支持 `sentiment` 分析结论，是否忽略转折、反讽或尾联变化。

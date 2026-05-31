@@ -15,7 +15,7 @@ reasoner -> local validator -> formatter -> final validator
 - **Submission runner**：模型直接生成最终提交 JSON，用于最终答案指标、JSON 错误率和延迟评测。当前 `src/cli/run_submission_eval.py` 属于这一类。
 - **True harness**：Reasoner 输出 `evidence`、`sentiment` 和 `draft_answer`，其中 `draft_answer` 不含 `choose_id`；Formatter 或本地 mapper 根据 `sentiment + task.choose` 生成最终 `choose_id`。当前 `src/cli/run_harness.py` 以这一契约为目标。本文的 schema 和 validator 规则以 true harness 为准。
 
-本文使用 `docs/contracts/data-schema.md` 中的统一输入 schema：
+本文使用 `docs/spec/data-schema.md` 中的统一输入 schema：
 
 ```json
 {
@@ -84,7 +84,7 @@ Reasoner 必须输出一个 JSON 对象，不输出自由长 CoT：
 - `evidence.sentences` 的 key 覆盖 `qa_sents` 去重后的句子；value 为嵌套对象，含 `translation`（现代汉语直译/意译）、`key_images`（意象列表）和 `rationale`（不超过 40 字）。
 - `evidence.emotion` 是短证据数组，每条只写判断依据，不写完整推理过程。
 - `sentiment` 是结构化情感分析，包含 `primary`（主要情感标签）、`secondary`（次要情感标签列表，可选）和 `rationale`（判断依据）。
-- `sentiment.primary` 必须从情感标签受控词汇表中选择（参见 `docs/contracts/data-schema.md` 第 3.2 节），2-8 个中文字符。
+- `sentiment.primary` 必须从情感标签受控词汇表中选择（参见 `docs/spec/data-schema.md` 第 3.2 节），2-8 个中文字符。
 - `sentiment.rationale` 不超过 80 字，引用诗中关键词和意象。
 - `draft_answer` 必须包含 `ans_qa_words`、`ans_qa_sents`，**不包含 `choose_id`**。
 - `draft_answer` 不包含 `idx`，避免和最终提交字段混淆；最终 `idx` 由 harness 注入。
@@ -194,7 +194,7 @@ Reasoner 后验证：
 - JSON 解析：无法解析为对象，记为 `valid_json=false`。
 - 必需字段：检查 `idx`、`evidence`、`sentiment`、`sentiment.primary`、`sentiment.rationale`、`draft_answer`、`draft_answer.ans_qa_words`、`draft_answer.ans_qa_sents`。
 - `idx`：必须等于原题 `idx`。
-- 情感合法性：`sentiment.primary` 必须为非空字符串；`sentiment.primary` 必须属于受控词汇表（参见 `docs/contracts/data-schema.md` 第 3.2 节）。不合法时标记 `sentiment_primary_missing` 或 `sentiment_not_in_vocab`。
+- 情感合法性：`sentiment.primary` 必须为非空字符串；`sentiment.primary` 必须属于受控词汇表（参见 `docs/spec/data-schema.md` 第 3.2 节）。不合法时标记 `sentiment_primary_missing` 或 `sentiment_not_in_vocab`。
 - 目标覆盖：`ans_qa_words` 必须包含所有 `qa_words` 去重后的词语；`ans_qa_sents` 必须包含所有 `qa_sents` 去重后的句子。
 - 长度：词义答案建议不超过 40 个中文字符；句子翻译建议不超过 80 个中文字符。超限不直接判失败，但标记 `overlong_fields`。`sentiment.rationale` 建议不超过 80 个中文字符。
 - 空值：空字符串、`null`、空对象中的目标 key 视为缺项。
@@ -256,7 +256,7 @@ final.choose_id = ""
 
 ## 需要人工确认的问题
 
-- 官方正式数据字段名是否与 `docs/contracts/data-schema.md` 的 `idx/title/author/content/qa_words/qa_sents/choose` 完全一致。
+- 官方正式数据字段名是否与 `docs/spec/data-schema.md` 的 `idx/title/author/content/qa_words/qa_sents/choose` 完全一致。
   A：一致
 - 目标词或目标句重复出现时，最终 JSON key 是保留一次还是按出现位置区分。
   A：按位置区分

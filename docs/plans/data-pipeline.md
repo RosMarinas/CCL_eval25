@@ -56,7 +56,7 @@
 脚本 `src/cli/generate_teacher_data.py` 应实现：
 
 1. 读取输入数据（训练集 164 首或评测 dev split 50 首）
-2. 调用 DeepSeek API，传入 teacher prompt（见 `docs/contracts/teacher-data.md`）
+2. 调用 DeepSeek API，传入 teacher prompt（见 `docs/contract/teacher-data.md`）
 3. 速率控制：最多 10 QPS，失败重试 3 次，指数退避（1s, 2s, 4s）
 4. 分批保存中间结果到 `data/teacher/` 目录
 5. 记录生成日志（成功/失败/重试次数）
@@ -118,7 +118,7 @@ response = requests.post(
 
 ## 4. 自动过滤
 
-Teacher 生成数据必须经过自动过滤规则（详见 `docs/contracts/teacher-data.md` 第 5 节），此外增加：
+Teacher 生成数据必须经过自动过滤规则（详见 `docs/contract/teacher-data.md` 第 5 节），此外增加：
 
 ### 4.1 Sentiment 专项过滤
 

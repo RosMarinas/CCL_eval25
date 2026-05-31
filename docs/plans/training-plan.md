@@ -21,7 +21,7 @@
 | BC8 teacher-critique 子集 | 统一输入题目 + 候选错误答案 | `structured critique + correction_evidence + corrected_answer` | 学习识别 sentiment 分析错误（primary 标签偏差、rationale 不符诗歌）、词义误解、缺项和过长答案 |
 | BC8-final replay | 统一输入题目 | 最终 JSON | 降低混合蒸馏后的 JSON 错误率和输出漂移 |
 
-最终提交仍只使用 `docs/contracts/data-schema.md` 的最终 JSON。`structured evidence`、`draft_answer`、`critique` 和 `correction_evidence` 只用于训练和 harness 中间态，不进入最终提交。
+最终提交仍只使用 `docs/spec/data-schema.md` 的最终 JSON。`structured evidence`、`draft_answer`、`critique` 和 `correction_evidence` 只用于训练和 harness 中间态，不进入最终提交。
 
 ## 2. B8 answer-only QLoRA 配置
 
@@ -44,7 +44,7 @@ B8 的目标是把最佳 8B 级 reasoner 适配到 CCL25 的最终输出格式�
 - 输出：只包含 `idx/ans_qa_words/ans_qa_sents/choose_id` 的最终 JSON。
 - 训练数据来源（train-data/ 的 164 首诗）没有 `choose` 选项，因此这些样本的 `choose_id` 标签为 `""`。这属于正常情况，模型在此部分只学习词义和句译输出格式，不学习情感选项选择。
 - 不混入 `short_evidence`、`teacher_critique`、自由 CoT 或 Markdown。
-- 样本过滤复用 `docs/contracts/data-schema.md` 与 `docs/contracts/teacher-data.md` 的覆盖、选项合法性和长度规则。
+- 样本过滤复用 `docs/spec/data-schema.md` 与 `docs/contract/teacher-data.md` 的覆盖、选项合法性和长度规则。
 
 ### 2.2 推荐 QLoRA 超参
 
@@ -154,7 +154,7 @@ BC8 不是自由 CoT 训练。允许的非最终 JSON 输出只限结构化短�
 }
 ```
 
-其中 `evidence_draft` 与 `docs/contracts/data-schema.md`（第 3 节）的 Reasoner 中间输出保持一致，`draft_answer` 不包含 `idx`，由外层样本或 harness 注入；`corrected_answer` 是可直接评测的最终答案，必须包含 `idx` 并符合最终答案 schema（包括 `choose_id`）。`emotion_error` 现在针对 **sentiment 分析**（primary/secondary 标签是否匹配诗歌、rationale 是否合理），而非直接批评 `choose_id` 选择。
+其中 `evidence_draft` 与 `docs/spec/data-schema.md`（第 3 节）的 Reasoner 中间输出保持一致，`draft_answer` 不包含 `idx`，由外层样本或 harness 注入；`corrected_answer` 是可直接评测的最终答案，必须包含 `idx` 并符合最终答案 schema（包括 `choose_id`）。`emotion_error` 现在针对 **sentiment 分析**（primary/secondary 标签是否匹配诗歌、rationale 是否合理），而非直接批评 `choose_id` 选择。
 
 ## 4. 数据比例调整条件
 
