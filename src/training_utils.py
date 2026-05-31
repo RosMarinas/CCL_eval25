@@ -20,7 +20,6 @@ from transformers import (
 )
 
 from src.eval import parse_json_object
-from src.inference import load_model as _load_model  # re-exported
 from src.schema import unique_preserve_order
 
 logger = logging.getLogger(__name__)
@@ -284,10 +283,6 @@ def prepare_dataset(
 # ---------------------------------------------------------------------------
 # Model loading with QLoRA
 # ---------------------------------------------------------------------------
-
-
-# load_quantized_model and apply_lora are now in src/inference.py.
-# Import load_model / load_model_with_lora from src.inference directly.
 
 
 # ---------------------------------------------------------------------------

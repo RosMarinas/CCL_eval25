@@ -45,7 +45,6 @@ from typing import Any
 
 import torch
 from peft import PeftModel
-from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from src.training_utils import load_dev_data
 from src.inference import load_model

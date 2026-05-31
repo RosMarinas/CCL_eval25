@@ -125,12 +125,14 @@ _LOG_FILE_ATTR = "_vllm_log_file"
 _LOG_PATH_ATTR = "_vllm_log_path"
 
 
-def start_vllm(spec: dict[str, Any], log_dir: Path) -> subprocess.Popen:
+def start_vllm(spec: dict[str, Any], log_dir: Path,
+               cwd: Path | None = None) -> subprocess.Popen:
     """Launch a vLLM OpenAI-compatible API server.
 
     Args:
         spec: dict with keys \"model\", \"quantization\" (\"awq4\" or other).
         log_dir: directory for per-model server logs.
+        cwd: working directory for the subprocess (defaults to CWD).
     """
     served_name = served_model_name(spec)
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -156,7 +158,7 @@ def start_vllm(spec: dict[str, Any], log_dir: Path) -> subprocess.Popen:
 
     log_file = log_path.open("w", encoding="utf-8")
     proc = subprocess.Popen(
-        cmd, env=env,
+        cmd, cwd=cwd, env=env,
         stdout=log_file, stderr=subprocess.STDOUT,
     )
     # Attach log handles for cleanup and error reporting

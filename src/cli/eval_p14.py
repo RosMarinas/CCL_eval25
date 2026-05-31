@@ -18,7 +18,6 @@ import time
 from pathlib import Path
 
 import torch
-from transformers import AutoTokenizer
 
 from src.eval import (
     CORE_JSON_ERRORS,
@@ -27,12 +26,10 @@ from src.eval import (
     classify_json_errors,
     parse_json_object,
 )
+from src.inference import load_model
 from src.training_utils import render_prompt_text
 
 logger = logging.getLogger(__name__)
-
-
-from src.inference import load_model
 
 def generate_batch(model, tokenizer, prompts, max_new_tokens):
     """Batched greedy generation with left-padding.
@@ -74,7 +71,7 @@ def main():
 
     logger.info("Loading model %s ...", args.base_model)
     t_load = time.monotonic()
-    model, tokenizer = load_model(args.base_model, args.device)
+    model, tokenizer = load_model(args.base_model, device={"": args.device})
     logger.info("Model loaded in %.1fs on %s", time.monotonic() - t_load, model.device)
 
     prompts = [render_prompt_text(t) for t in tasks]

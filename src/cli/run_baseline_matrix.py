@@ -15,7 +15,6 @@ from __future__ import annotations
 import json
 import math
 import os
-import subprocess
 import sys
 import time
 import traceback
@@ -158,7 +157,7 @@ def baseline_runner() -> int:
             proc = None
             stage = "load"
             try:
-                proc = start_vllm(spec, log_dir=E3_DIR / "logs")
+                proc = start_vllm(spec, log_dir=E3_DIR / "logs", cwd=ROOT)
                 wait_for_vllm(proc, timeout_s=VLLM_LOAD_TIMEOUT)
                 stage = "generate"
                 detail_rows = run_experiment(spec, dev_tasks)

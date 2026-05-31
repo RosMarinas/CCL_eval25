@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import math
 import os
-import subprocess
 import sys
 import time
 import urllib.error
@@ -133,7 +132,7 @@ def main() -> int:
 
         proc = None
         try:
-            proc = start_vllm(spec, log_dir=LOG_DIR)
+            proc = start_vllm(spec, log_dir=LOG_DIR, cwd=ROOT)
             wait_for_vllm(proc, timeout_s=int(os.environ.get("SMOKE_VLLM_LOAD_TIMEOUT", "3600")))
             run_details = run_experiment(spec, tasks)
             details.extend(run_details)
