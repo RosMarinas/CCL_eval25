@@ -37,13 +37,13 @@ import torch
 from peft import PeftModel
 from transformers import Trainer, TrainingArguments
 
+from src.inference import load_model
 from src.training_utils import (
     PadCollator,
     build_training_pairs,
     evaluate,
     load_answer_only,
     load_dev_data,
-    load_quantized_model,
     load_train_source,
     prepare_dataset,
 )
@@ -111,7 +111,7 @@ def train_replay(args: argparse.Namespace) -> int:
 
     # ---- Step 2: Load base model with 4-bit quant, then attach BC8 adapter ----
     logger.info("Step 2/6: Loading base model + BC8 LoRA adapter ...")
-    model, tokenizer = load_quantized_model(args.base_model)
+    model, tokenizer = load_model(args.base_model, for_training=True)
     model = PeftModel.from_pretrained(model, args.checkpoint, is_trainable=True)
     model.gradient_checkpointing_enable()
     model.print_trainable_parameters()

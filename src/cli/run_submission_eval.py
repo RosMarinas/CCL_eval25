@@ -47,7 +47,8 @@ import torch
 from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from src.training_utils import load_dev_data, load_quantized_model
+from src.training_utils import load_dev_data
+from src.inference import load_model
 from src.eval import (
     CORE_JSON_ERRORS,
     HARD_JSON_ERRORS,
@@ -117,7 +118,7 @@ def generate_reasoner_outputs(
     logger.info("Generating reasoner outputs for %d tasks ...", len(tasks))
 
     logger.info("Loading base model: %s", base_model)
-    model, tokenizer = load_quantized_model(base_model)
+    model, tokenizer = load_model(base_model)
 
     logger.info("Loading LoRA adapter from %s", checkpoint_path)
     model = PeftModel.from_pretrained(model, checkpoint_path)
@@ -332,7 +333,7 @@ def run_h2(
 
     # Load formatter model (base Qwen3-8B, no LoRA)
     logger.info("Loading formatter model: %s", args.base_model)
-    formatter_model, formatter_tokenizer = load_quantized_model(args.base_model)
+    formatter_model, formatter_tokenizer = load_model(args.base_model)
     formatter_model.eval()
     formatter_model.config.use_cache = True
     if hasattr(formatter_model, "gradient_checkpointing_disable"):

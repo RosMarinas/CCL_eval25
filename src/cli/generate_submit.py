@@ -2,43 +2,12 @@
 import argparse, json, logging, sys, time
 from pathlib import Path
 import torch
-from peft import PeftModel
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 from src.eval import parse_json_object
+from src.inference import load_model_with_lora
 from src.training_utils import render_prompt_text
 
 logger = logging.getLogger(__name__)
-
-
-def load_model(base_model: str, device: str, checkpoint: str | None = None):
-    bnb = BitsAndBytesConfig(
-        load_in_4bit=True, bnb_4bit_use_double_quant=True,
-        bnb_4bit_quant_type="nf4", bnb_4bit_compute_dtype=torch.bfloat16,
-    )
-    tokenizer = AutoTokenizer.from_pretrained(base_model, trust_remote_code=True)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    if checkpoint is None:
-        # Prompt-only mode (e.g. P14 baseline): load directly with 4-bit NF4
-        model = AutoModelForCausalLM.from_pretrained(
-            base_model, quantization_config=bnb,
-            device_map={"": device}, torch_dtype=torch.bfloat16,
-            trust_remote_code=True,
-        )
-    else:
-        model = AutoModelForCausalLM.from_pretrained(
-            base_model, quantization_config=bnb,
-            device_map={"": device}, torch_dtype=torch.bfloat16, trust_remote_code=True,
-        )
-        model = PeftModel.from_pretrained(model, checkpoint)
-
-    model.eval()
-    model.config.use_cache = True
-    if hasattr(model, "gradient_checkpointing_disable"):
-        model.gradient_checkpointing_disable()
-    return model, tokenizer
 
 
 def main():
@@ -62,7 +31,8 @@ def main():
     logger.info("Loaded %d tasks", n)
 
     logger.info("Loading model ...")
-    model, tokenizer = load_model(args.base_model, args.device, args.checkpoint)
+    model, tokenizer = load_model_with_lora(args.base_model, args.checkpoint,
+                                             device=args.device)
     logger.info("Model device: %s", model.device)
 
     submit = []

@@ -25,9 +25,9 @@ from peft import PeftModel
 
 from src.training_utils import (
     load_dev_data,
-    load_quantized_model,
     render_evidence_draft_text,
 )
+from src.inference import load_model
 from src.eval import (
     CORE_JSON_ERRORS,
     HARD_JSON_ERRORS,
@@ -80,7 +80,7 @@ def _generate_with_model(
 
 
 def _load_peft_model(base_model: str, checkpoint_path: str) -> tuple[torch.nn.Module, Any]:
-    model, tokenizer = load_quantized_model(base_model)
+    model, tokenizer = load_model(base_model)
     model = PeftModel.from_pretrained(model, checkpoint_path)
     model.eval()
     model.config.use_cache = True
@@ -145,7 +145,7 @@ def generate_reasoner_outputs(
 
 
 def _make_formatter_fn(base_model: str) -> Callable[[dict[str, Any]], str]:
-    model, tokenizer = load_quantized_model(base_model)
+    model, tokenizer = load_model(base_model)
     model.eval()
     model.config.use_cache = True
     if hasattr(model, "gradient_checkpointing_disable"):

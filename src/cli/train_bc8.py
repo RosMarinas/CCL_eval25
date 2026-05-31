@@ -37,11 +37,11 @@ from typing import Any
 
 import torch
 from datasets import Dataset
-from peft import LoraConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
+from peft import LoraConfig, PeftModel, get_peft_model
+from src.inference import load_model
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
-    BitsAndBytesConfig,
     Trainer,
     TrainingArguments,
 )
@@ -526,44 +526,6 @@ def tokenize_pairs(
 # ---------------------------------------------------------------------------
 
 
-def load_quantized_model(
-    model_name: str,
-    device: str = "auto",
-) -> tuple[AutoModelForCausalLM, AutoTokenizer]:
-    """Load model in 4-bit NF4 with double quant and bf16 compute dtype.
-
-    Args:
-        model_name: HuggingFace model ID.
-        device: Device map (e.g. "auto", "cuda:0", or 0).
-    """
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_use_double_quant=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16,
-    )
-
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_name,
-        trust_remote_code=True,
-        use_fast=True,
-    )
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        quantization_config=bnb_config,
-        device_map=device,
-        torch_dtype=torch.bfloat16,
-        trust_remote_code=True,
-    )
-
-    model = prepare_model_for_kbit_training(model)
-    model.config.use_cache = False
-    return model, tokenizer
-
-
 def load_b8_adapter(
     model: AutoModelForCausalLM,
     b8_checkpoint: str,
@@ -858,7 +820,8 @@ def train_bc8(args: argparse.Namespace) -> int:
 
     # ---- Step 3: Load model + tokenizer with 4-bit quant + B8 adapter ----
     logger.info("Step 3/7: Loading base model with 4-bit quantization (device=%s) ...", args.device)
-    model, tokenizer = load_quantized_model(args.base_model, device=args.device)
+    model, tokenizer = load_model(args.base_model, device=args.device,
+                                   for_training=True)
 
     logger.info("  Loading B8 adapter from %s ...", args.b8_checkpoint)
     model = load_b8_adapter(model, args.b8_checkpoint)

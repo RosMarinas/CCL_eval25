@@ -14,14 +14,13 @@ from typing import Any
 
 import torch
 from datasets import Dataset
-from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
-    BitsAndBytesConfig,
 )
 
 from src.eval import parse_json_object
+from src.inference import load_model as _load_model  # re-exported
 from src.schema import unique_preserve_order
 
 logger = logging.getLogger(__name__)
@@ -287,65 +286,8 @@ def prepare_dataset(
 # ---------------------------------------------------------------------------
 
 
-def load_quantized_model(
-    model_name: str,
-    device: str = "auto",
-) -> tuple[AutoModelForCausalLM, AutoTokenizer]:
-    """Load model in 4-bit NF4 with double quant and bf16 compute dtype."""
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_use_double_quant=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16,
-    )
-
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_name,
-        trust_remote_code=True,
-        use_fast=True,
-    )
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        quantization_config=bnb_config,
-        device_map=device,
-        torch_dtype=torch.bfloat16,
-        trust_remote_code=True,
-    )
-
-    model = prepare_model_for_kbit_training(model)
-    model.config.use_cache = False
-    return model, tokenizer
-
-
-def apply_lora(
-    model: AutoModelForCausalLM,
-    r: int = 16,
-    alpha: int = 32,
-    dropout: float = 0.05,
-) -> AutoModelForCausalLM:
-    """Wrap the model with LoRA adapters on all attention + MLP linear layers."""
-    peft_config = LoraConfig(
-        r=r,
-        lora_alpha=alpha,
-        lora_dropout=dropout,
-        target_modules=[
-            "q_proj",
-            "k_proj",
-            "v_proj",
-            "o_proj",
-            "gate_proj",
-            "up_proj",
-            "down_proj",
-        ],
-        bias="none",
-        task_type="CAUSAL_LM",
-    )
-    model = get_peft_model(model, peft_config)
-    model.print_trainable_parameters()
-    return model
+# load_quantized_model and apply_lora are now in src/inference.py.
+# Import load_model / load_model_with_lora from src.inference directly.
 
 
 # ---------------------------------------------------------------------------

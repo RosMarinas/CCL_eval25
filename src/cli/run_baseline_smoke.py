@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import math
 import os
-import socket
 import subprocess
 import sys
 import time
@@ -14,6 +13,11 @@ from typing import Any
 
 from src.baseline import ModelConfig, PromptConfig, run_prompt_baseline
 from src.eval import classify_json_errors, compute_json_error_rates
+from src.inference import (
+    VLLM_PORT, API_URL,
+    start_vllm, wait_for_vllm, is_vllm_ready, cleanup_vllm,
+    is_port_open, served_model_name, run_text, inspect_runtime,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,8 +27,6 @@ DOC_PATH = ROOT / "docs" / "baseline-smoke-results.md"
 DETAIL_PATH = OUT_DIR / "smoke-results.jsonl"
 SUMMARY_PATH = OUT_DIR / "smoke-summary.json"
 FAILURE_PATH = OUT_DIR / "smoke-failures.jsonl"
-VLLM_PORT = 8000
-API_URL = f"http://127.0.0.1:{VLLM_PORT}/v1/chat/completions"
 LOG_DIR = OUT_DIR / "logs"
 
 DECODE_PARAMS = {
@@ -131,13 +133,13 @@ def main() -> int:
 
         proc = None
         try:
-            proc = start_vllm(spec)
-            wait_for_server(proc, timeout_s=int(os.environ.get("SMOKE_VLLM_LOAD_TIMEOUT", "3600")))
+            proc = start_vllm(spec, log_dir=LOG_DIR)
+            wait_for_vllm(proc, timeout_s=int(os.environ.get("SMOKE_VLLM_LOAD_TIMEOUT", "3600")))
             run_details = run_experiment(spec, tasks)
             details.extend(run_details)
             summaries.append(make_summary(spec, run_details, "ok", ""))
         except Exception as exc:  # noqa: BLE001 - smoke must record environment failures.
-            stage = "load" if proc is not None and not is_server_ready() else "generate"
+            stage = "load" if proc is not None and not is_vllm_ready() else "generate"
             failures.append(failure_record(spec, stage, str(exc)))
             summaries.append(summary_for_failure(spec, str(exc)))
         finally:
@@ -163,74 +165,6 @@ def main() -> int:
     )
     DOC_PATH.write_text(render_report(summaries, details, failures, cleanup_records), encoding="utf-8")
     return 0
-
-
-def inspect_runtime() -> dict[str, Any]:
-    return {
-        "port_open": is_port_open("127.0.0.1", VLLM_PORT),
-        "vllm_processes": run_text(["pgrep", "-af", "vllm"], check=False).splitlines(),
-    }
-
-
-def is_port_open(host: str, port: int) -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.settimeout(1)
-        return sock.connect_ex((host, port)) == 0
-
-
-def start_vllm(spec: dict[str, Any]) -> subprocess.Popen:
-    served_name = served_model_name(spec)
-    log_path = LOG_DIR / f"{served_name}.log"
-    env = os.environ.copy()
-    env["HF_ENDPOINT"] = "https://hf-mirror.com"
-    env["VLLM_USE_FLASHINFER_SAMPLER"] = "0"
-    cmd = [
-        sys.executable,
-        "-m",
-        "vllm.entrypoints.openai.api_server",
-        "--model",
-        spec["model"],
-        "--served-model-name",
-        served_name,
-        "--host",
-        "127.0.0.1",
-        "--port",
-        str(VLLM_PORT),
-        "--dtype",
-        "float16" if spec["quantization"] == "awq4" else "bfloat16",
-        "--max-model-len",
-        "4096",
-        "--gpu-memory-utilization",
-        "0.85",
-        "--trust-remote-code",
-    ]
-    if spec["quantization"] == "awq4":
-        cmd.extend(["--quantization", "awq"])
-    log_file = log_path.open("w", encoding="utf-8")
-    proc = subprocess.Popen(cmd, cwd=ROOT, env=env, stdout=log_file, stderr=subprocess.STDOUT)
-    proc._smoke_log_file = log_file  # type: ignore[attr-defined]
-    proc._smoke_log_path = log_path  # type: ignore[attr-defined]
-    return proc
-
-
-def wait_for_server(proc: subprocess.Popen, timeout_s: int) -> None:
-    deadline = time.time() + timeout_s
-    last_error = ""
-    while time.time() < deadline:
-        if proc.poll() is not None:
-            raise RuntimeError(f"vLLM exited early with code {proc.returncode}; see {proc._smoke_log_path}")  # type: ignore[attr-defined]
-        if is_server_ready():
-            return
-        time.sleep(5)
-    raise TimeoutError(f"vLLM server did not become ready within {timeout_s}s; see {proc._smoke_log_path}: {last_error}")  # type: ignore[attr-defined]
-
-
-def is_server_ready() -> bool:
-    try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{VLLM_PORT}/v1/models", timeout=2) as response:
-            return response.status == 200
-    except Exception:
-        return False
 
 
 def run_experiment(spec: dict[str, Any], tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -417,37 +351,6 @@ def next_step_for(error: str) -> str:
     if "port 8000" in lowered:
         return "Stop or move the existing service before retrying."
     return "Inspect the per-model vLLM log under data/baseline/logs/."
-
-
-def cleanup_vllm(proc: subprocess.Popen | None, spec: dict[str, Any]) -> dict[str, Any]:
-    record = {"model": spec["model"], "pid": None, "terminated": False, "postcheck": None}
-    if proc is None:
-        record["postcheck"] = inspect_runtime()
-        return record
-    record["pid"] = proc.pid
-    if proc.poll() is None:
-        proc.terminate()
-        try:
-            proc.wait(timeout=60)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait(timeout=30)
-        record["terminated"] = True
-    log_file = getattr(proc, "_smoke_log_file", None)
-    if log_file is not None:
-        log_file.close()
-    time.sleep(3)
-    record["postcheck"] = inspect_runtime()
-    return record
-
-
-def served_model_name(spec: dict[str, Any]) -> str:
-    return spec["model"].split("/")[-1].lower().replace(".", "-")
-
-
-def run_text(cmd: list[str], check: bool = True) -> str:
-    result = subprocess.run(cmd, check=check, capture_output=True, text=True)
-    return result.stdout.strip()
 
 
 def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:

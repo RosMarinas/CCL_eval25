@@ -19,12 +19,6 @@ import sys
 from pathlib import Path
 
 import torch
-from peft import PeftModel
-from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    BitsAndBytesConfig,
-)
 
 from src.training_utils import (
     load_dev_data,
@@ -32,35 +26,7 @@ from src.training_utils import (
     classify_json_errors,
 )
 from src.eval import parse_json_object
-
-
-def load_model_for_eval(model_name: str, device: str = "cuda:0"):
-    """Load model in 4-bit NF4 for inference (no kbit training prep)."""
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_use_double_quant=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16,
-    )
-
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_name,
-        trust_remote_code=True,
-        use_fast=True,
-    )
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        quantization_config=bnb_config,
-        device_map=device,
-        torch_dtype=torch.bfloat16,
-        trust_remote_code=True,
-    )
-
-    model.config.use_cache = True
-    return model, tokenizer
+from src.inference import load_model_with_lora
 
 
 def main():
@@ -86,13 +52,12 @@ def main():
 
     # ---- Load model ----
     print("Loading base model (4-bit quantized) ...", flush=True)
-    model, tokenizer = load_model_for_eval(args.base_model, args.device)
-
     checkpoint_path = str(project_root / args.checkpoint
                           if not Path(args.checkpoint).is_absolute()
                           else args.checkpoint)
-    print(f"Loading LoRA adapter from {checkpoint_path} ...", flush=True)
-    model = PeftModel.from_pretrained(model, checkpoint_path)
+    print(f"Loading model + LoRA adapter from {checkpoint_path} ...", flush=True)
+    model, tokenizer = load_model_with_lora(args.base_model, checkpoint_path,
+                                             device=args.device)
     model.eval()
     model.config.use_cache = True
 

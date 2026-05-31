@@ -18,11 +18,7 @@ import time
 from pathlib import Path
 
 import torch
-from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    BitsAndBytesConfig,
-)
+from transformers import AutoTokenizer
 
 from src.eval import (
     CORE_JSON_ERRORS,
@@ -36,30 +32,7 @@ from src.training_utils import render_prompt_text
 logger = logging.getLogger(__name__)
 
 
-def load_model(base_model: str, device: str):
-    """Load BF16 model with 4-bit NF4 quantization (no LoRA).
-
-    Matches the BitsAndBytes approach used by all other eval scripts.
-    """
-    bnb = BitsAndBytesConfig(
-        load_in_4bit=True, bnb_4bit_use_double_quant=True,
-        bnb_4bit_quant_type="nf4", bnb_4bit_compute_dtype=torch.bfloat16,
-    )
-    tokenizer = AutoTokenizer.from_pretrained(base_model, trust_remote_code=True)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    model = AutoModelForCausalLM.from_pretrained(
-        base_model,
-        quantization_config=bnb,
-        device_map={"": device},
-        torch_dtype=torch.bfloat16,
-        trust_remote_code=True,
-    )
-    model.eval()
-    model.config.use_cache = True
-    return model, tokenizer
-
+from src.inference import load_model
 
 def generate_batch(model, tokenizer, prompts, max_new_tokens):
     """Batched greedy generation with left-padding.

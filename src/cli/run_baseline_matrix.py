@@ -15,7 +15,6 @@ from __future__ import annotations
 import json
 import math
 import os
-import socket
 import subprocess
 import sys
 import time
@@ -27,6 +26,11 @@ from typing import Any
 
 from src.baseline import ModelConfig, PromptConfig, build_experiment_id, run_prompt_baseline
 from src.eval import CORE_JSON_ERRORS, classify_json_errors, compute_json_error_rates
+from src.inference import (
+    VLLM_PORT, API_URL,
+    start_vllm, wait_for_vllm, is_vllm_ready, cleanup_vllm,
+    kill_orphan_vllm, is_port_open, served_model_name, run_text, inspect_runtime,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_PATH = ROOT / "data" / "eval_data.json"
@@ -35,9 +39,6 @@ DOC_PATH = ROOT / "docs" / "e3-dev100-results.md"
 MASTER_DETAIL_PATH = E3_DIR / "results.jsonl"
 MASTER_SUMMARY_PATH = E3_DIR / "summary.json"
 FAILURE_PATH = E3_DIR / "failures.jsonl"
-VLLM_PORT = 8000
-API_URL = f"http://127.0.0.1:{VLLM_PORT}/v1/chat/completions"
-
 DEV_SPLIT_SIZE = 100
 GENERATE_TIMEOUT = int(os.environ.get("E3_GENERATE_TIMEOUT", "240"))
 VLLM_LOAD_TIMEOUT = int(os.environ.get("E3_VLLM_LOAD_TIMEOUT", "3600"))
@@ -152,13 +153,13 @@ def baseline_runner() -> int:
             before = inspect_runtime()
             if before["port_open"]:
                 print("[WARN] Port 8000 in use before startup — attempting cleanup.")
-                _kill_orphan_vllm()
+                kill_orphan_vllm()
 
             proc = None
             stage = "load"
             try:
-                proc = start_vllm(spec)
-                wait_for_server(proc, timeout_s=VLLM_LOAD_TIMEOUT)
+                proc = start_vllm(spec, log_dir=E3_DIR / "logs")
+                wait_for_vllm(proc, timeout_s=VLLM_LOAD_TIMEOUT)
                 stage = "generate"
                 detail_rows = run_experiment(spec, dev_tasks)
                 summary = make_summary(spec, detail_rows, "ok", "")
@@ -301,121 +302,6 @@ def _call_chat_completion(prompt: str, spec: dict[str, Any], metadata: dict[str,
         text = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"HTTP {exc.code}: {text[:1000]}") from exc
     return body["choices"][0]["message"]["content"]
-
-
-# ============================================================
-# vLLM lifecycle
-# ============================================================
-
-
-def start_vllm(spec: dict[str, Any]) -> subprocess.Popen:
-    served_name = served_model_name(spec)
-    log_path = E3_DIR / "logs" / f"{served_name}.log"
-    env = os.environ.copy()
-    env["HF_ENDPOINT"] = "https://hf-mirror.com"
-    env["VLLM_USE_FLASHINFER_SAMPLER"] = "0"
-    cmd = [
-        sys.executable, "-m", "vllm.entrypoints.openai.api_server",
-        "--model", spec["model"],
-        "--served-model-name", served_name,
-        "--host", "127.0.0.1",
-        "--port", str(VLLM_PORT),
-        "--dtype", "float16" if spec["quantization"] == "awq4" else "bfloat16",
-        "--max-model-len", "4096",
-        "--gpu-memory-utilization", "0.85",
-        "--trust-remote-code",
-    ]
-    if spec["quantization"] == "awq4":
-        cmd.extend(["--quantization", "awq"])
-    log_file = log_path.open("w", encoding="utf-8")
-    proc = subprocess.Popen(cmd, cwd=ROOT, env=env, stdout=log_file, stderr=subprocess.STDOUT)
-    proc._log_file = log_file  # type: ignore[attr-defined]
-    proc._log_path = log_path  # type: ignore[attr-defined]
-    return proc
-
-
-def wait_for_server(proc: subprocess.Popen, timeout_s: int) -> None:
-    deadline = time.time() + timeout_s
-    while time.time() < deadline:
-        if proc.poll() is not None:
-            raise RuntimeError(
-                f"vLLM exited early with code {proc.returncode}; "
-                f"see {proc._log_path}"  # type: ignore[attr-defined]
-            )
-        if is_server_ready():
-            return
-        time.sleep(5)
-    raise TimeoutError(
-        f"vLLM not ready within {timeout_s}s; "
-        f"see {proc._log_path}"  # type: ignore[attr-defined]
-    )
-
-
-def is_server_ready() -> bool:
-    try:
-        with urllib.request.urlopen(
-            f"http://127.0.0.1:{VLLM_PORT}/v1/models", timeout=2
-        ) as response:
-            return response.status == 200
-    except Exception:
-        return False
-
-
-def cleanup_vllm(proc: subprocess.Popen | None, spec: dict[str, Any]) -> dict[str, Any]:
-    record: dict[str, Any] = {"model": spec["model"], "pid": None, "terminated": False, "postcheck": None}
-    if proc is None:
-        record["postcheck"] = inspect_runtime()
-        return record
-    record["pid"] = proc.pid
-    if proc.poll() is None:
-        proc.terminate()
-        try:
-            proc.wait(timeout=60)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait(timeout=30)
-        record["terminated"] = True
-    log_file = getattr(proc, "_log_file", None)
-    if log_file is not None:
-        log_file.close()
-    time.sleep(3)
-    record["postcheck"] = inspect_runtime()
-    return record
-
-
-# ============================================================
-# Utilities
-# ============================================================
-
-
-def inspect_runtime() -> dict[str, Any]:
-    return {
-        "port_open": is_port_open("127.0.0.1", VLLM_PORT),
-        "vllm_processes": run_text(["pgrep", "-af", "vllm"], check=False).splitlines(),
-    }
-
-
-def is_port_open(host: str, port: int) -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.settimeout(1)
-        return sock.connect_ex((host, port)) == 0
-
-
-def served_model_name(spec: dict[str, Any]) -> str:
-    return spec["model"].split("/")[-1].lower().replace(".", "-")
-
-
-def run_text(cmd: list[str], check: bool = True) -> str:
-    result = subprocess.run(cmd, check=check, capture_output=True, text=True)
-    return result.stdout.strip()
-
-
-def _kill_orphan_vllm() -> None:
-    try:
-        subprocess.run(["pkill", "-f", "vllm.entrypoints"], timeout=30, check=False)
-        time.sleep(5)
-    except Exception:
-        pass
 
 
 def _next_step_for(error: str) -> str:

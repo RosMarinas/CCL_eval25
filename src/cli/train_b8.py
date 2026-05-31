@@ -32,11 +32,11 @@ from typing import Any
 import torch
 import transformers
 from datasets import Dataset
-from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+from peft import LoraConfig, get_peft_model
+from src.inference import load_model
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
-    BitsAndBytesConfig,
     Trainer,
     TrainingArguments,
 )
@@ -312,36 +312,6 @@ def prepare_dataset(
 # ---------------------------------------------------------------------------
 
 
-def load_quantized_model(model_name: str) -> tuple[AutoModelForCausalLM, AutoTokenizer]:
-    """Load model in 4-bit NF4 with double quant and bf16 compute dtype."""
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_use_double_quant=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16,
-    )
-
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_name,
-        trust_remote_code=True,
-        use_fast=True,
-    )
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        quantization_config=bnb_config,
-        device_map="auto",
-        torch_dtype=torch.bfloat16,
-        trust_remote_code=True,
-    )
-
-    model = prepare_model_for_kbit_training(model)
-    model.config.use_cache = False
-    return model, tokenizer
-
-
 def apply_lora(
     model: AutoModelForCausalLM,
     r: int = 16,
@@ -587,7 +557,7 @@ def train_b8(args: argparse.Namespace) -> int:
 
     # ---- Step 3: Load model + tokenizer with 4-bit quant ----
     logger.info("Step 3/7: Loading QLoRA model ...")
-    model, tokenizer = load_quantized_model(args.base_model)
+    model, tokenizer = load_model(args.base_model, for_training=True)
     model = apply_lora(model, r=args.lora_r, alpha=args.lora_alpha, dropout=args.lora_dropout)
     model.gradient_checkpointing_enable()
 
